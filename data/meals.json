@@ -1,0 +1,37 @@
+{
+  "grilled chicken salad": {
+    "Calories": 350,
+    "Protein (g)": 35,
+    "Carbs (g)": 15,
+    "Fat (g)": 18,
+    "source": "verified"
+  },
+  "salmon with rice": {
+    "Calories": 450,
+    "Protein (g)": 30,
+    "Carbs (g)": 45,
+    "Fat (g)": 20,
+    "source": "verified"
+  },
+  "vegetable stir fry": {
+    "Calories": 300,
+    "Protein (g)": 12,
+    "Carbs (g)": 45,
+    "Fat (g)": 12,
+    "source": "verified"
+  },
+  "chicken burrito bowl": {
+    "Calories": 700,
+    "Protein (g)": 44,
+    "Carbs (g)": 82,
+    "Fat (g)": 25,
+    "source": "verified"
+  },
+  "greek yogurt with berries": {
+    "Calories": 200,
+    "Protein (g)": 20,
+    "Carbs (g)": 25,
+    "Fat (g)": 4,
+    "source": "verified"
+  }
+}

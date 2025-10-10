@@ -1,0 +1,35 @@
+{
+  "default": {
+    "user_id": "default",
+    "goal": "maintenance",
+    "target_calories": 2000,
+    "target_protein": 150,
+    "allergies": [],
+    "preferences": {
+      "diet_type": "balanced",
+      "meal_size": "medium"
+    }
+  },
+  "example_bulking": {
+    "user_id": "example_bulking",
+    "goal": "bulking",
+    "target_calories": 3000,
+    "target_protein": 200,
+    "allergies": [],
+    "preferences": {
+      "diet_type": "high_protein",
+      "meal_size": "large"
+    }
+  },
+  "example_cutting": {
+    "user_id": "example_cutting",
+    "goal": "cutting",
+    "target_calories": 1800,
+    "target_protein": 160,
+    "allergies": [],
+    "preferences": {
+      "diet_type": "low_carb",
+      "meal_size": "small"
+    }
+  }
+}
