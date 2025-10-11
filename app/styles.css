@@ -1,0 +1,233 @@
+/*
+  FitPlate AI - styles.css
+  Modern, responsive, AI-style theme. Mobile-first with light/dark modes.
+  Design choices:
+  - CSS variables for color palette and theming
+  - Card-based layout with soft shadows
+  - Docked chat input on mobile
+  - Subtle animations for AI feel
+*/
+
+:root {
+  --bg: #f7f8fb;
+  --bg-elev: #ffffff;
+  --text: #0f172a;
+  --muted: #475569;
+  --primary: #5b7cfa; /* violet-blue */
+  --primary-2: #3bc8e7; /* cyan */
+  --accent: #8b5cf6;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --ring: rgba(91, 124, 250, 0.35);
+  --card-shadow: 0 6px 18px rgba(2, 6, 23, 0.08);
+  --radius: 14px;
+  --maxw: 980px;
+}
+
+/* Dark theme overrides */
+:root[data-theme="dark"] {
+  --bg: #0b1020;
+  --bg-elev: #111729;
+  --text: #e5e7eb;
+  --muted: #94a3b8;
+  --primary: #7aa2ff;
+  --primary-2: #4dd6ef;
+  --accent: #a78bfa;
+  --ring: rgba(122, 162, 255, 0.35);
+  --card-shadow: 0 8px 22px rgba(0,0,0,0.35);
+}
+
+html, body {
+  background: linear-gradient(140deg, var(--bg) 0%, #eef1ff 50%, var(--bg) 100%);
+  color: var(--text);
+  font-family: 'Inter', 'Poppins', ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+
+/* Container sizing for centered layouts */
+.block-container { /* Streamlit root content */
+  max-width: var(--maxw);
+}
+
+/***** Cards and sections *****/
+.card {
+  background: var(--bg-elev);
+  border-radius: var(--radius);
+  box-shadow: var(--card-shadow);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  padding: 1rem 1.25rem;
+}
+
+.section-header {
+  font-weight: 700;
+  font-size: 1.1rem;
+  margin: 0.25rem 0 0.5rem;
+  color: var(--text);
+}
+
+.subsection-header {
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin: 0.25rem 0 0.25rem;
+  color: var(--muted);
+}
+
+/* Tags / chips */
+.diet-tag, .nutrient-tag, .chip {
+  display: inline-block;
+  padding: 0.25rem 0.65rem;
+  border-radius: 9999px;
+  background: rgba(91, 124, 250, 0.12);
+  color: var(--text);
+  border: 1px solid rgba(91, 124, 250, 0.25);
+  font-size: 0.85rem;
+  margin: 0.25rem 0.35rem 0.25rem 0;
+}
+
+.chip.suggestion {
+  cursor: pointer;
+  user-select: none;
+}
+
+/* Chat docking (mobile) */
+@media (max-width: 480px) {
+  [data-testid="stChatInput"] {
+    position: fixed !important;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 0.35rem 0.75rem 0.75rem 0.75rem;
+    background: linear-gradient(180deg, rgba(0,0,0,0) 0%, var(--bg) 30%);
+    backdrop-filter: blur(6px);
+    z-index: 50;
+  }
+  /* Add bottom padding so content isn't obscured by the dock */
+  .block-container { padding-bottom: 100px; }
+}
+
+/* Buttons: modern look for inline actions */
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.8rem;
+  border-radius: 10px;
+  border: 1px solid rgba(148,163,184,0.25);
+  background: linear-gradient(180deg, rgba(255,255,255,0.2), rgba(148,163,184,0.12));
+  color: var(--text);
+  box-shadow: var(--card-shadow);
+}
+
+/* AI analyzing animation */
+.ai-analyzing {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.9rem;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(148,163,184,0.12);
+}
+.ai-dots > span {
+  display: inline-block;
+  width: 6px; height: 6px; border-radius: 50%;
+  margin: 0 2px; background: var(--primary);
+  animation: bounce 1.2s infinite ease-in-out;
+}
+.ai-dots > span:nth-child(2) { animation-delay: 0.15s; }
+.ai-dots > span:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes bounce {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.45; }
+  40% { transform: translateY(-5px); opacity: 1; }
+}
+
+/* Typewriter feel for streamed text */
+.ai-reply {
+  position: relative;
+  overflow: hidden;
+}
+.ai-reply::after {
+  content: '';
+  position: absolute;
+  height: 100%;
+  width: 2px;
+  right: 0; top: 0;
+  background: var(--primary);
+  animation: caret 1s steps(1) infinite;
+}
+@keyframes caret { 50% { opacity: 0; } }
+
+/* Indeterminate progress bar */
+.progress-line {
+  position: relative;
+  overflow: hidden;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(91, 124, 250, 0.15);
+}
+.progress-line .bar {
+  position: absolute;
+  left: -40%;
+  width: 40%; height: 100%;
+  background: linear-gradient(90deg, var(--primary), var(--primary-2));
+  animation: indeterminate 1.2s linear infinite;
+}
+@keyframes indeterminate {
+  0% { left: -40%; }
+  100% { left: 100%; }
+}
+
+/* Top bar */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.35rem 0.25rem 0.75rem 0.25rem;
+}
+.topbar .title {
+  display: flex; align-items: center; gap: 0.6rem;
+  font-weight: 800; letter-spacing: 0.2px;
+}
+.topbar .theme-toggle {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+}
+
+/* Image preview sizing */
+.image-preview img { border-radius: var(--radius); box-shadow: var(--card-shadow); }
+
+/* Small helper classes */
+.mt-1 { margin-top: 0.25rem; }
+.mt-2 { margin-top: 0.5rem; }
+.mt-3 { margin-top: 1rem; }
+.mb-1 { margin-bottom: 0.25rem; }
+.mb-2 { margin-bottom: 0.5rem; }
+.mb-3 { margin-bottom: 1rem; }
+
+/* Skeleton shimmer placeholders */
+.skel-line {
+  position: relative;
+  overflow: hidden;
+  background: rgba(148,163,184,0.2);
+  border-radius: 10px;
+}
+.shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent);
+  animation: shimmer-move 1.15s infinite;
+}
+@keyframes shimmer-move { to { transform: translateX(100%); } }
+
+.skel-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+}
+
+@media (max-width: 480px) {
+  .skel-grid { grid-template-columns: 1fr 1fr; }
+}

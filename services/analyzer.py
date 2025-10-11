@@ -7,6 +7,11 @@ from PIL import Image
 from pydantic import ValidationError
 
 from openai import AsyncOpenAI
+import hashlib
+import functools
+import asyncio
+import time
+from datetime import datetime
 from app.models import (
     DishAnalysis, NutritionAnalysis, FoodItem,
     NutritionInfo, FoodItemWithNutrition,
@@ -14,8 +19,19 @@ from app.models import (
     MealRecommendations
 )
 
-# Configure service logger
+# Configure service logger (with timestamped console output by default)
 logger = logging.getLogger(__name__)
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _formatter = logging.Formatter(
+        fmt='%(asctime)s %(levelname)s [%(name)s] %(message)s',
+        datefmt='%Y-%m-%dT%H:%M:%S'
+    )
+    _handler.setFormatter(_formatter)
+    logger.addHandler(_handler)
+logger.setLevel(logging.INFO)
+# Avoid duplicate logs if a root handler exists (e.g., Streamlit)
+logger.propagate = False
 
 class AIResponseError(Exception):
     """Custom exception for AI response handling errors."""
@@ -24,11 +40,19 @@ class AIResponseError(Exception):
 class FoodAnalyzerService:
     def __init__(self, api_key: str) -> None:
         """Initialize the FoodAnalyzer with API key."""
-        from app.config import VISION_MODEL, CHAT_MODEL
+        from app.config import VISION_MODEL, CHAT_MODEL, JSON_TEMPERATURE, JSON_MAX_TOKENS, TEXT_TEMPERATURE, TEXT_MAX_TOKENS
         self.api_key = api_key
         self.client = AsyncOpenAI(api_key=api_key)
         self.VISION_MODEL = VISION_MODEL
         self.CHAT_MODEL = CHAT_MODEL
+        self.JSON_TEMPERATURE = JSON_TEMPERATURE
+        self.JSON_MAX_TOKENS = JSON_MAX_TOKENS
+        self.TEXT_TEMPERATURE = TEXT_TEMPERATURE
+        self.TEXT_MAX_TOKENS = TEXT_MAX_TOKENS
+
+        # Simple in-memory caches (LRU)
+        self._vision_cache = {}
+        self._nutrition_cache = {}
 
     def _clean_ai_response(self, response: str) -> str:
         """Clean and validate AI response.
@@ -62,18 +86,20 @@ class FoodAnalyzerService:
                     "status": "error",
                     "error": "Could not detect any food items in the image"
                 }
-            
-            # Step 2: Get nutrition information
-            nutrition = await self._analyze_nutrition(scene_analysis.items)
+            # Step 2 + 3: Run nutrition and recommendations concurrently.
+            # Provide a light-weight hint for recommendations while nutrition computes.
+            nutrition_task = asyncio.create_task(self._analyze_nutrition(scene_analysis.items))
+            recommendations_task = asyncio.create_task(self._get_recommendations(None))
+            nutrition, recommendations = await asyncio.gather(nutrition_task, recommendations_task)
+            # If recommendations ran with None, re-run quickly with nutrition summary once available
+            if recommendations and recommendations.get("meal_type", "unknown") == "unknown" and nutrition:
+                try:
+                    recommendations = await self._get_recommendations(nutrition)
+                except Exception:
+                    pass
             if not nutrition:
                 logger.error("Failed to analyze nutrition")
-                return {
-                    "status": "error",
-                    "error": "Could not analyze nutritional information"
-                }
-            
-            # Step 3: Get AI recommendations
-            recommendations = await self._get_recommendations(nutrition)
+                return {"status": "error", "error": "Could not analyze nutritional information"}
             if not recommendations:
                 logger.warning("Could not generate recommendations")
                 recommendations = {
@@ -165,9 +191,24 @@ class FoodAnalyzerService:
             # Convert image to base64
             import base64
             import io
+            # Resize to width<=512 to reduce payload and latency while preserving quality
+            try:
+                img = image.copy()
+                max_w = 512
+                if img.width > max_w:
+                    ratio = max_w / float(img.width)
+                    new_size = (max_w, int(img.height * ratio))
+                    img = img.resize(new_size)
+            except Exception:
+                img = image
             buffered = io.BytesIO()
-            image.save(buffered, format="JPEG")
-            img_str = base64.b64encode(buffered.getvalue()).decode()
+            img.save(buffered, format="JPEG", quality=85)
+            bytes_val = buffered.getvalue()
+            img_str = base64.b64encode(bytes_val).decode()
+            # vision cache key by MD5
+            img_md5 = hashlib.md5(bytes_val).hexdigest()
+            if img_md5 in self._vision_cache:
+                return self._vision_cache[img_md5]
 
             # Get JSON schema from our Pydantic model
             vision_schema = VisionAnalysisResponse.model_json_schema()
@@ -187,6 +228,13 @@ class FoodAnalyzerService:
             Return ONLY valid JSON matching this schema."""
 
             # Prepare API call with strict JSON response format
+            # Log start
+            _ts = datetime.utcnow().isoformat()
+            _start = time.perf_counter()
+            logger.info(
+                f"[OpenAI][START] ts={_ts} step=vision model={self.VISION_MODEL} temp={self.JSON_TEMPERATURE} max_tokens={self.JSON_MAX_TOKENS} img_w={img.width} img_h={img.height}"
+            )
+
             response = await self.client.chat.completions.create(
                 model=self.VISION_MODEL,
                 messages=[
@@ -215,9 +263,19 @@ class FoodAnalyzerService:
                     }
                 ],
                 response_format={"type": "json_object"},
-                temperature=0.3,  # Lower temperature for more consistent formatting
-                max_tokens=1000
+                temperature=self.JSON_TEMPERATURE,
+                max_tokens=self.JSON_MAX_TOKENS
             )
+
+            # Log end
+            _dur_ms = int((time.perf_counter() - _start) * 1000)
+            usage = getattr(response, "usage", None)
+            if usage:
+                logger.info(
+                    f"[OpenAI][END] step=vision dur_ms={_dur_ms} prompt_tokens={getattr(usage, 'prompt_tokens', 'n/a')} completion_tokens={getattr(usage, 'completion_tokens', 'n/a')} total_tokens={getattr(usage, 'total_tokens', 'n/a')}"
+                )
+            else:
+                logger.info(f"[OpenAI][END] step=vision dur_ms={_dur_ms}")
 
             # Parse and validate response using Pydantic
             try:
@@ -228,7 +286,6 @@ class FoodAnalyzerService:
                 
                 # Clean and validate the response
                 raw_response = self._clean_ai_response(raw_response)
-                logger.debug(f"Cleaned response for parsing: {raw_response}")
                 
                 # Validate through Pydantic
                 try:
@@ -243,14 +300,14 @@ class FoodAnalyzerService:
                     raise AIResponseError("Response failed schema validation") from ve
                 except json.JSONDecodeError as je:
                     logger.error(f"JSON parsing failed: {str(je)}")
-                    logger.debug(f"Attempted to parse: {raw_response}")
                     raise AIResponseError("Invalid JSON in response") from je
                 
-                # Log success with item count
-                item_count = len(vision_response.items)
-                logger.info(f"Successfully validated response with {item_count} food items")
+                # Success
                 
-                return DishAnalysis(items=vision_response.items)
+                result = DishAnalysis(items=vision_response.items)
+                # cache
+                self._vision_cache[img_md5] = result
+                return result
                 
             except AIResponseError as are:
                 logger.error(f"AI response error: {str(are)}")
@@ -281,82 +338,7 @@ class FoodAnalyzerService:
                 )
             ])
 
-    async def _get_recommendations(self, nutrition: NutritionAnalysis) -> MealRecommendations:
-        """Get meal recommendations based on nutritional analysis."""
-        try:
-            logger.info("Getting meal recommendations")
-            
-            # Prepare the nutrition data for the prompt
-            items_summary = "\n".join([
-                f"- {item.name}: {item.nutrition.calories}cal, "
-                f"{item.nutrition.protein_g}g protein, "
-                f"{item.nutrition.carbs_g}g carbs, "
-                f"{item.nutrition.fat_g}g fat"
-                for item in nutrition.items
-            ])
-            
-            combined = nutrition.combined
-            prompt = (
-                "Analyze this meal and provide recommendations in this exact JSON format:\n"
-                "{\n"
-                "  'meal_rating': 8.5,  // Overall rating out of 10\n"
-                "  'health_score': 85,  // Health score out of 100\n"
-                "  'suggestions': ['Add more vegetables', 'Consider whole grains'],  // List of improvements\n"
-                "  'improvements': ['Increase fiber intake', 'Reduce saturated fat'],  // Specific improvements\n"
-                "  'positive_aspects': ['Good protein content', 'Balanced macros']  // Positive points\n"
-                "}\n\n"
-                f"Meal Analysis:\n{items_summary}\n\n"
-                f"Combined Nutrition:\n"
-                f"- Total Calories: {combined.calories}\n"
-                f"- Protein: {combined.protein_g}g\n"
-                f"- Carbs: {combined.carbs_g}g\n"
-                f"- Fat: {combined.fat_g}g\n"
-                f"- Fiber: {combined.fiber_g}g\n"
-                f"- Sugar: {combined.sugar_g}g\n"
-                f"- Saturated Fat: {combined.saturated_fat_g}g\n"
-            )
-
-            # Get recommendations from GPT-4
-            response = await self.client.chat.completions.create(
-                model=self.CHAT_MODEL,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a professional nutritionist providing meal recommendations. "
-                            "Respond with valid JSON only, using the exact format shown. "
-                            "Give specific, actionable advice based on the nutritional analysis."
-                        )
-                    },
-                    {"role": "user", "content": prompt}
-                ]
-            )
-
-            # Parse and validate the response
-            raw_response = self._clean_ai_response(response.choices[0].message.content)
-            logger.debug("Raw recommendation response:")
-            logger.debug(raw_response)
-
-            try:
-                recommendations_data = json.loads(raw_response)
-                logger.debug("Parsed recommendations:")
-                logger.debug(json.dumps(recommendations_data, indent=2))
-                
-                # Validate with Pydantic
-                recommendations = MealRecommendations.model_validate(recommendations_data)
-                logger.info("Recommendations validation successful")
-                return recommendations
-                
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse recommendations JSON: {e}")
-                raise AIResponseError("Invalid recommendations format received")
-            except ValidationError as ve:
-                logger.error(f"Recommendations validation error: {ve}")
-                raise AIResponseError(f"Invalid recommendations data: {ve}")
-                
-        except Exception as e:
-            logger.error(f"Error getting recommendations: {str(e)}")
-            raise AIResponseError(f"Failed to process recommendations: {str(e)}")
+    # Removed earlier duplicate _get_recommendations (Pydantic-based); using the dict-based version below
 
     async def _analyze_nutrition(self, items: List[FoodItem]) -> NutritionAnalysis:
         """Analyze nutrition for identified items."""
@@ -397,14 +379,10 @@ class FoodAnalyzerService:
             )
 
         try:
-            # Log items being processed
+            # Prepare items
             item_names = [f"{item.name} ({item.type})" for item in items]
-            logger.info(f"Input items for nutrition analysis: {[item.name for item in items]}")
-            
-            for item in items:
-                logger.info(f"Processing item: {item.name}")
 
-            # Convert items to format for API
+            # Convert items to format for API and build cache key
             api_items = [
                 {
                     "name": item.name,
@@ -413,8 +391,11 @@ class FoodAnalyzerService:
                 }
                 for item in items
             ]
+            cache_key = json.dumps(api_items, sort_keys=True)
+            if cache_key in self._nutrition_cache:
+                return self._nutrition_cache[cache_key]
 
-            logger.info(f"Estimating nutrition for items: {item_names}")
+            # Estimating nutrition for items (suppress verbose listing)
             
             # Prepare prompt for GPT-4
             prompt = (
@@ -537,20 +518,36 @@ class FoodAnalyzerService:
                 "6. The 'type' field must be one of: main_dish, side_dish, beverage, condiment"
             )
             
+            # Log start
+            _ts = datetime.utcnow().isoformat()
+            _start = time.perf_counter()
+            logger.info(
+                f"[OpenAI][START] ts={_ts} step=nutrition model={self.CHAT_MODEL} temp={self.JSON_TEMPERATURE} max_tokens={self.JSON_MAX_TOKENS} items={len(api_items)}"
+            )
+
             response = await self.client.chat.completions.create(
                 model=self.CHAT_MODEL,
                 messages=[
                     {"role": "system", "content": system_message},
                     {"role": "user", "content": prompt}
-                ]
+                ],
+                response_format={"type": "json_object"},
+                temperature=self.JSON_TEMPERATURE,
+                max_tokens=self.JSON_MAX_TOKENS
             )
+
+            # Log end
+            _dur_ms = int((time.perf_counter() - _start) * 1000)
+            usage = getattr(response, "usage", None)
+            if usage:
+                logger.info(
+                    f"[OpenAI][END] step=nutrition dur_ms={_dur_ms} prompt_tokens={getattr(usage, 'prompt_tokens', 'n/a')} completion_tokens={getattr(usage, 'completion_tokens', 'n/a')} total_tokens={getattr(usage, 'total_tokens', 'n/a')}"
+                )
+            else:
+                logger.info(f"[OpenAI][END] step=nutrition dur_ms={_dur_ms}")
 
             # Get and clean the response
             raw_response = self._clean_ai_response(response.choices[0].message.content)
-            logger.debug("Raw GPT response content:")
-            logger.debug(response.choices[0].message.content)
-            logger.debug("\nCleaned response:")
-            logger.debug(raw_response)
             
             def convert_to_numeric(val):
                 """Convert string values to appropriate numeric types."""
@@ -603,7 +600,7 @@ class FoodAnalyzerService:
                     # Get the model field name from mapping, keeping original if not found
                     new_key = field_mapping.get(k_lower, k)
                     result[new_key] = normalize_keys(v)
-                    logger.debug(f"Key normalization: {k} -> {new_key}")
+                    # quiet
                     
                 # Convert numeric values if possible
                 if 'calories' in result:
@@ -618,31 +615,23 @@ class FoodAnalyzerService:
                 # Parse the JSON response
                 try:
                     parsed_data = json.loads(raw_response)
-                    logger.info("\nParsed JSON structure:")
-                    logger.info(json.dumps(parsed_data, indent=2))
                     
                     # Check if required top-level keys exist (case-insensitive)
                     available_keys = {k.lower(): k for k in parsed_data.keys()}
                     if 'combined' not in available_keys or 'items' not in available_keys:
-                        logger.error("Missing required top-level keys in parsed data")
-                        logger.error(f"Available keys: {list(parsed_data.keys())}")
+                        logger.error("Missing required top-level keys in parsed nutrition data")
                         raise AIResponseError("Response missing required fields: 'combined' and/or 'items'")
                         
                 except json.JSONDecodeError as je:
                     logger.error(f"JSON parsing error at position {je.pos}: {je.msg}")
-                    logger.error(f"Error context: {raw_response[max(0, je.pos-50):je.pos+50]}")
                     raise AIResponseError(f"Failed to parse response as JSON: {str(je)}")
                 
                 # Normalize the data structure
                 normalized_data = normalize_keys(parsed_data)
-                logger.info("\nNormalized data structure:")
-                logger.info(json.dumps(normalized_data, indent=2))
-                logger.info(f"Normalized keys: {list(normalized_data.keys())}")
 
                 # Validate and prepare the data structure
                 if 'combined' not in normalized_data or 'items' not in normalized_data:
-                    logger.error("Missing required keys after normalization")
-                    logger.error(f"Available keys: {list(normalized_data.keys())}")
+                    logger.error("Missing required keys after normalization in nutrition data")
                     raise AIResponseError("Response missing required fields: 'combined' and/or 'items'")
 
                 # Ensure each item in items has all required fields
@@ -655,55 +644,25 @@ class FoodAnalyzerService:
                     missing_fields = required_item_fields - set(item.keys())
                     if missing_fields:
                         logger.error(f"Item {idx} is missing required fields: {missing_fields}")
-                        logger.error(f"Item content: {json.dumps(item, indent=2)}")
                         raise AIResponseError(f"Item {idx} missing required fields: {missing_fields}")
 
                 # Validate with Pydantic
                 try:
-                    # Debug the structure before validation
-                    logger.info("Data structure before validation:")
-                    logger.info(json.dumps(normalized_data, indent=2))
-                    
-                    # Log validation details
-                    if "combined" in normalized_data:
-                        combined_data = normalized_data["combined"]
-                        logger.info("\nCombined data types:")
-                        for k, v in combined_data.items():
-                            logger.info(f"{k}: {type(v)} = {v}")
-                    
-                    if "items" in normalized_data:
-                        for i, item in enumerate(normalized_data["items"]):
-                            logger.info(f"\nItem {i + 1} data types:")
-                            for k, v in item.items():
-                                logger.info(f"{k}: {type(v)} = {v}")
-                    
-                    # Try to validate with Pydantic
-                    logger.info("\nAttempting Pydantic validation...")
+                    # Validate with Pydantic
                     nutrition_response = NutritionAnalysisResponse.model_validate(normalized_data)
-                    logger.info("Validation successful!")
-                    logger.info(f"Combined nutrition: {nutrition_response.combined}")
-                    logger.info(f"Number of items: {len(nutrition_response.items)}")
-                    
-                    # Log successful validation details
-                    logger.debug("Validated response structure:")
-                    logger.debug(f"Combined nutrition present: {nutrition_response.combined is not None}")
-                    logger.debug(f"Number of items: {len(nutrition_response.items)}")
-                    logger.debug(f"First item sample: {nutrition_response.items[0].model_dump() if nutrition_response.items else 'No items'}")
                     
                 except ValidationError as ve:
-                    logger.error("\n=== VALIDATION ERRORS ===")
+                    logger.error("Validation errors in nutrition data")
                     for error in ve.errors():
                         path = ' -> '.join(str(x) for x in error['loc'])
-                        logger.error(f"\nError in field: {path}")
-                        logger.error(f"Error type: {error.get('type', 'Unknown')}")
-                        logger.error(f"Message: {error['msg']}")
+                        logger.error(f"Field={path} type={error.get('type', 'Unknown')} msg={error['msg']}")
                         
                         # Get the actual value that caused the error
                         current = normalized_data
                         try:
                             for part in error['loc']:
                                 current = current[part]
-                            logger.error(f"Current value: {current} (type: {type(current)})")
+                            logger.error(f"Current value type: {type(current)}")
                         except (KeyError, IndexError):
                             logger.error("Could not access current value")
                         
@@ -715,7 +674,7 @@ class FoodAnalyzerService:
                                 parent = normalized_data
                                 for part in error['loc'][:-1]:
                                     parent = parent[part]
-                                logger.error(f"Parent context: {json.dumps(parent, indent=2)}")
+                                # Suppress full parent context dump in logs
                             except (KeyError, IndexError):
                                 logger.error("Could not access parent context")
                     
@@ -732,6 +691,8 @@ class FoodAnalyzerService:
                 if not analysis.items:
                     raise AIResponseError("Missing individual item nutrition information")
                 
+                # cache success
+                self._nutrition_cache[cache_key] = analysis
                 return analysis
                 
             except ValidationError as ve:
@@ -800,16 +761,26 @@ class FoodAnalyzerService:
                 ]
             }
 
-            # Generate field requirements from the required_fields dictionary
-            field_requirements = "\n".join([
-                f"   - {field}: {specs['type']}"
-                f"{f' (valid values: {", ".join(specs["values"])})' if "values" in specs else ''}"
-                f"{f' ({specs["range"]})' if "range" in specs else ''}"
-                f" - {specs['description']}"
-                for field, specs in required_fields.items()
-            ])
+            # Generate field requirements from the required_fields dictionary (avoid nested f-strings)
+            field_requirements_lines = []
+            for field, specs in required_fields.items():
+                line = f"   - {field}: {specs['type']}"
+                if "values" in specs:
+                    line += " (valid values: " + ", ".join(specs["values"]) + ")"
+                if "range" in specs:
+                    line += f" ({specs['range']})"
+                line += f" - {specs['description']}"
+                field_requirements_lines.append(line)
+            field_requirements = "\n".join(field_requirements_lines)
 
             # Ask AI for comprehensive analysis
+            # Log start
+            _ts = datetime.utcnow().isoformat()
+            _start = time.perf_counter()
+            logger.info(
+                f"[OpenAI][START] ts={_ts} step=recommendations model={self.CHAT_MODEL} temp={self.JSON_TEMPERATURE} max_tokens={self.JSON_MAX_TOKENS}"
+            )
+
             response = await self.client.chat.completions.create(
                 model=self.CHAT_MODEL,
                 messages=[
@@ -830,14 +801,25 @@ class FoodAnalyzerService:
                         "Analyze this meal's nutrition profile and provide recommendations:\n"
                         f"{json.dumps(nutrition_summary, indent=2)}"
                     )}
-                ]
+                ],
+                response_format={"type": "json_object"},
+                temperature=self.JSON_TEMPERATURE,
+                max_tokens=self.JSON_MAX_TOKENS
             )
+
+            # Log end
+            _dur_ms = int((time.perf_counter() - _start) * 1000)
+            usage = getattr(response, "usage", None)
+            if usage:
+                logger.info(
+                    f"[OpenAI][END] step=recommendations dur_ms={_dur_ms} prompt_tokens={getattr(usage, 'prompt_tokens', 'n/a')} completion_tokens={getattr(usage, 'completion_tokens', 'n/a')} total_tokens={getattr(usage, 'total_tokens', 'n/a')}"
+                )
+            else:
+                logger.info(f"[OpenAI][END] step=recommendations dur_ms={_dur_ms}")
 
             raw_response = self._clean_ai_response(response.choices[0].message.content)
             try:
                 recommendations = json.loads(raw_response)
-                logger.debug("Raw recommendations response:")
-                logger.debug(json.dumps(recommendations, indent=2))
                 
                 # Use the same required_fields dictionary for validation
                 missing_fields = [field for field in required_fields if field not in recommendations]
@@ -880,13 +862,6 @@ class FoodAnalyzerService:
                     for error in validation_errors:
                         logger.error(f"- {error}")
                     raise AIResponseError(f"Invalid recommendations format: {'; '.join(validation_errors)}")
-                
-                # Log successful validation
-                logger.info("Recommendations validation successful")
-                logger.info(f"Health Score: {recommendations['health_score']}")
-                logger.info(f"Meal Type: {recommendations['meal_type']}")
-                logger.info(f"Number of recommendations: {len(recommendations['recommendations'])}")
-                logger.info(f"Number of dietary considerations: {len(recommendations['dietary_considerations'])}")
                 
                 return recommendations
                 
@@ -942,15 +917,32 @@ class FoodAnalyzerService:
                 ]
             }
 
+            # Log start for suggestions generation
+            _ts = datetime.utcnow().isoformat()
+            _start = time.perf_counter()
+            logger.info(
+                f"[OpenAI][START] ts={_ts} step=suggestions model={self.CHAT_MODEL} temp={self.TEXT_TEMPERATURE} max_tokens={self.TEXT_MAX_TOKENS}"
+            )
+
             response = await self.client.chat.completions.create(
                 model=self.CHAT_MODEL,
                 messages=[
                     {"role": "system", "content": system_msg},
                     {"role": "user", "content": f"Analyze this meal and suggest improvements:\n{json.dumps(meal_context, indent=2)}"}
                 ],
-                temperature=0.7,  # Allow some creativity in suggestions
-                max_tokens=300
+                temperature=self.TEXT_TEMPERATURE,
+                max_tokens=self.TEXT_MAX_TOKENS
             )
+
+            # Log end
+            _dur_ms = int((time.perf_counter() - _start) * 1000)
+            usage = getattr(response, "usage", None)
+            if usage:
+                logger.info(
+                    f"[OpenAI][END] step=suggestions dur_ms={_dur_ms} prompt_tokens={getattr(usage, 'prompt_tokens', 'n/a')} completion_tokens={getattr(usage, 'completion_tokens', 'n/a')} total_tokens={getattr(usage, 'total_tokens', 'n/a')}"
+                )
+            else:
+                logger.info(f"[OpenAI][END] step=suggestions dur_ms={_dur_ms}")
 
             # Extract suggestions from response
             if response.choices and response.choices[0].message:
@@ -1011,11 +1003,18 @@ class FoodAnalyzerService:
             ]
 
             # Get streaming response from OpenAI
+            # Log start for streaming (no duration/usage until consumer completes)
+            _ts = datetime.utcnow().isoformat()
+            logger.info(
+                f"[OpenAI][START] ts={_ts} step=qa_stream model={self.CHAT_MODEL} temp={self.TEXT_TEMPERATURE} max_tokens={self.TEXT_MAX_TOKENS}"
+            )
+
             stream = await self.client.chat.completions.create(
                 model=self.CHAT_MODEL,
                 messages=messages,
                 stream=True,
-                max_tokens=500
+                max_tokens=self.TEXT_MAX_TOKENS,
+                temperature=self.TEXT_TEMPERATURE
             )
 
             return stream

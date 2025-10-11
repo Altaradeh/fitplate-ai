@@ -122,57 +122,39 @@ async def handle_chat(analyzer: FoodAnalyzerService, question: str, analysis_res
 
 
 def load_styles():
-    """Load custom CSS styles."""
-    st.markdown("""
-        <style>
-        .meal-card {
-            background-color: #ffffff;
-            padding: 1.5rem;
-            border-radius: 0.75rem;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-            margin-bottom: 1rem;
-        }
-        
-        .metric-grid {
-            display: grid;
-            gap: 1rem;
-            margin: 1rem 0;
-        }
-        
-        .nutrient-tag {
-            display: inline-block;
-            padding: 0.25rem 0.75rem;
-            margin: 0.25rem;
-            border-radius: 1rem;
-            background-color: #f3f4f6;
-            color: #374151;
-            font-size: 0.875rem;
-            font-weight: 500;
-        }
-        
-        .section-title {
-            color: #111827;
-            font-size: 1.25rem;
-            font-weight: 600;
-            margin: 1.5rem 0 1rem;
-        }
-        
-        .insight-card {
-            background-color: #f8fafc;
-            padding: 1rem;
-            border-left: 4px solid #3b82f6;
-            margin: 0.5rem 0;
-        }
-        
-        .warning-tag {
-            color: #dc2626;
-            background-color: #fee2e2;
-            padding: 0.25rem 0.5rem;
-            border-radius: 0.25rem;
-            font-size: 0.875rem;
-        }
-        </style>
-    """, unsafe_allow_html=True)
+    """Load Google Fonts, FontAwesome, and external CSS with theme hook."""
+    # Google Fonts + FontAwesome
+    st.markdown(
+        """
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Persisted theme from localStorage; fallback to system preference
+    theme_js = """
+    <script>
+    (function(){
+      try {
+        const stored = window.localStorage.getItem('fitplate-theme');
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        const theme = stored || (prefersDark ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', theme);
+      } catch (e) {}
+    })();
+    </script>
+    """
+    st.markdown(theme_js, unsafe_allow_html=True)
+
+    # Load external CSS
+    try:
+      with open(os.path.join(os.path.dirname(__file__), 'styles.css')) as f:
+          st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+    except Exception as e:
+      st.warning(f"Could not load styles.css: {e}")
 
 def render_meal_analysis(analysis_data):
     """Render the meal analysis UI."""
@@ -256,6 +238,98 @@ def render_meal_analysis(analysis_data):
                     st.metric("Carbs", f"{item['nutrition']['carbs']:.1f}g")
                     st.metric("Fat", f"{item['nutrition']['fat']:.1f}g")
 
+def theme_toggle():
+    """Render theme toggle and persist choice in localStorage + session_state."""
+    if 'theme' not in st.session_state:
+        st.session_state.theme = None
+    # Read theme from query param or session
+    current = st.session_state.theme
+    if not current:
+        current = 'dark'  # default visually
+    colA, colB = st.columns([6,1])
+    with colB:
+        toggle = st.toggle("Dark Mode", value=(current=='dark'), label_visibility="collapsed")
+    theme = 'dark' if toggle else 'light'
+    st.session_state.theme = theme
+    # Apply to document
+    st.markdown(
+        f"""
+        <script>
+          try {{
+            document.documentElement.setAttribute('data-theme', '{theme}');
+            window.localStorage.setItem('fitplate-theme', '{theme}');
+          }} catch(e) {{}}
+        </script>
+        """,
+        unsafe_allow_html=True,
+    )
+
+def init_preferences():
+    """Initialize and hydrate user preferences from localStorage via JS bridge."""
+    if 'prefs' not in st.session_state:
+        st.session_state.prefs = {
+            'goal': 'balanced',
+            'diet': 'none',
+            'calorie_target': None,
+        }
+    # Read from localStorage and update session_state (best-effort)
+    st.markdown(
+        """
+        <script>
+        try {
+          const raw = window.localStorage.getItem('fitplate-prefs');
+          if (raw) {
+            const prefs = JSON.parse(raw);
+            const pySet = (k, v) => {
+              const el = document.createElement('div');
+              el.setAttribute('data-key', k);
+              el.setAttribute('data-value', JSON.stringify(v));
+              el.id = 'prefs-' + k;
+              document.body.appendChild(el);
+            };
+            for (const [k, v] of Object.entries(prefs)) pySet(k, v);
+          }
+        } catch(e) {}
+        </script>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def preferences_sidebar():
+    """Render preferences in sidebar and persist changes."""
+    with st.sidebar:
+        st.markdown("### 🎯 Preferences")
+        goal = st.selectbox(
+            "Goal",
+            ["balanced", "bulking", "cutting", "maintenance"],
+            index=["balanced","bulking","cutting","maintenance"].index(st.session_state.prefs.get('goal','balanced')),
+        )
+        diet = st.selectbox(
+            "Diet",
+            ["none", "keto", "vegan", "vegetarian", "mediterranean"],
+            index=["none","keto","vegan","vegetarian","mediterranean"].index(st.session_state.prefs.get('diet','none')),
+        )
+        cal = st.text_input("Daily calorie target (optional)", value=str(st.session_state.prefs.get('calorie_target') or ''))
+        cal_val = None
+        try:
+            cal_val = int(cal) if cal.strip() else None
+        except Exception:
+            pass
+        st.session_state.prefs.update({'goal': goal, 'diet': diet, 'calorie_target': cal_val})
+        # Persist to localStorage
+        st.markdown(
+            f"""
+            <script>
+            try {{
+              const prefs = {json.dumps({'goal': goal, 'diet': diet, 'calorie_target': cal_val})};
+              window.localStorage.setItem('fitplate-prefs', JSON.stringify(prefs));
+            }} catch(e) {{}}
+            </script>
+            """,
+            unsafe_allow_html=True,
+        )
+
 def main():
     """Main application entry point."""
     # Configure the page
@@ -265,14 +339,20 @@ def main():
         layout="centered"
     )
     
-    # Load custom styles
+    # Load custom styles and theme
     load_styles()
-    
-    # Initialize the analyzer service
-    analyzer = FoodAnalyzerService(api_key)
-    
-    st.title("🍽️ Smart Dish Analyzer")
-    
+
+    # Hydrate preferences and render sidebar
+    init_preferences()
+    preferences_sidebar()
+
+    # Top bar with title and theme toggle
+    st.markdown('<div class="topbar">\
+      <div class="title">🍽️ FitPlate AI</div>\
+      <div class="theme-toggle">', unsafe_allow_html=True)
+    theme_toggle()
+    st.markdown('</div></div>', unsafe_allow_html=True)
+
     # Verify OpenAI access
     loop = asyncio.get_event_loop()
     access_ok, error_msg = loop.run_until_complete(verify_openai_access())
@@ -284,23 +364,10 @@ def main():
     st.write("Upload a meal photo or use your camera to analyze your food and chat about your goals.")
 
     # Input methods
-    tab_upload, tab_camera = st.tabs(["📂 Upload Photo", "📷 Take Photo"])
+    tab_upload, tab_camera = st.tabs(["📂 Upload Photo", "📷 Take Photo"]) 
     image = None
     with tab_upload:
-        # Custom styling to hide filename
-        st.markdown(
-            '''
-            <style>
-            /* Hide the filename display */
-            .stFileUploader > div:first-child ~ div:not(:last-child) {display: none;}
-            /* Hide "Drag and drop file here" text */
-            .stFileUploader > div:first-child > div:first-child {display: none;}
-            /* Keep the upload button visible */
-            .stFileUploader > div:last-child {display: block !important;}
-            </style>
-            ''',
-            unsafe_allow_html=True
-        )
+        # Maintain uploader but rely on global CSS for visuals
         uploaded_file = st.file_uploader("Upload a dish photo", type=["jpg", "jpeg", "png"])
         if uploaded_file:
             image = Image.open(uploaded_file)
@@ -310,236 +377,162 @@ def main():
             image = Image.open(camera_input)
 
     if image:
-        # Display the image in a centered layout
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            st.image(image, caption="Your Dish", use_container_width=True)
-            
+        # Preview
+        with st.container():
+            st.markdown('<div class="card image-preview">', unsafe_allow_html=True)
+            st.image(image, caption="Your Dish", width='stretch')
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # Progress indicator and skeletons
+        st.markdown('<div class="progress-line"><div class="bar"></div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="ai-analyzing mt-2"><i class="fa-solid fa-wand-magic-sparkles"></i> Analyzing <span class="ai-dots"><span></span><span></span><span></span></span></div>', unsafe_allow_html=True)
+        # Skeleton cards
+        st.markdown('<div class="card"><div class="skel-grid">\
+          <div class="skel-line shimmer" style="height:24px"></div>\
+          <div class="skel-line shimmer" style="height:24px"></div>\
+          <div class="skel-line shimmer" style="height:24px"></div>\
+        </div></div>', unsafe_allow_html=True)
+
         with st.spinner("Analyzing your dish..."):
-            # Analyze the image and get nutrition data
             loop = asyncio.get_event_loop()
             dish, nutrition = loop.run_until_complete(process_image(image))
-            
-            # Create analysis container
-            analysis_container = st.container()
-            with analysis_container:
-                st.markdown('<p class="section-header">📊 Meal Analysis</p>', unsafe_allow_html=True)
-                
-                # Dish identification
-                confidence = dish['confidence'] * 100
-                confidence_emoji = "🎯" if confidence >= 90 else "✨" if confidence >= 70 else "👀"
-                st.success(f"{confidence_emoji} **{dish['dish_name']}** ({confidence:.1f}% confidence)")
-                
-                # Main nutrition card
-                main_card = st.container()
-                with main_card:
-                    # Top row: Calories and tags
-                    cal_col, tags_col = st.columns([1, 2])
-                    with cal_col:
-                        if not nutrition or not nutrition.get("nutrition_summary"):
-                            st.error("⚠️ Could not analyze nutrition information")
-                            return
-                        
-                        # Extract nutrition data from the new structure
-                        nutrition_summary = nutrition["nutrition_summary"]
-                        cal_dv = nutrition_summary["calories"]["daily_value"]
-                        st.metric(
-                            "Total Calories",
-                            f"{nutrition_summary['calories']['value']} kcal",
-                            f"{cal_dv}% Daily Value",
-                            help="Based on 2000 kcal daily requirement",
-                            delta_color="off"
-                        )
-                        meal_info = nutrition.get("meal_info", {})
-                        serving_size = meal_info.get("serving_size", "N/A")
-                        st.caption(f"📏 Serving: {serving_size}")
-                    
-                    with tags_col:
-                        diet_tags = nutrition_summary.get("diet_tags", [])
-                        if diet_tags:
-                            tags_html = " ".join([
-                                f'<span class="diet-tag">🏷️ {tag}</span>'
-                                for tag in diet_tags
-                            ])
-                            st.markdown(f"<div style='margin-top: 1rem;'>{tags_html}</div>", unsafe_allow_html=True)
-                
-                # Macronutrients grid
-                st.markdown('<p class="subsection-header">Macronutrients</p>', unsafe_allow_html=True)
-                macro_cols = st.columns(3)
-                
-                macros = nutrition_summary["macros"]
-                
-                with macro_cols[0]:
-                    st.metric(
-                        "🥩 Protein",
-                        f"{macros['protein']['value']:.1f}g",
-                        f"{macros['protein']['daily_value']}% DV",
-                        help="Based on 50g daily protein requirement",
-                        delta_color="off"
-                    )
-                
-                with macro_cols[1]:
-                    st.metric(
-                        "🍚 Carbohydrates",
-                        f"{macros['carbs']['value']:.1f}g",
-                        f"{macros['carbs']['daily_value']}% DV",
-                        help="Based on 225g daily carbohydrate requirement",
-                        delta_color="off"
-                    )
-                
-                with macro_cols[2]:
-                    st.metric(
-                        "🫒 Fat",
-                        f"{macros['fat']['value']:.1f}g",
-                        f"{macros['fat']['daily_value']}% DV",
-                        help="Based on 65g daily fat requirement",
-                        delta_color="off"
-                    )
-                
-                # Additional nutrients
-                st.markdown('<p class="subsection-header">Additional Nutrients</p>', unsafe_allow_html=True)
-                detail_cols = st.columns(2)
-                
-                additional = nutrition_summary["additional"]
-                
-                with detail_cols[0]:
-                    st.metric(
-                        "🌾 Fiber",
-                        f"{additional['fiber']['value']:.1f}g",
-                        f"{additional['fiber']['daily_value']}% DV",
-                        help="Based on 28g daily fiber requirement",
-                        delta_color="off"
-                    )
-                    
-                    st.metric(
-                        "🍯 Sugar",
-                        f"{additional['sugar']['value']:.1f}g",
-                        "No DV established",
-                        help="Includes both natural and added sugars",
-                        delta_color="off"
-                    )
-                
-                with detail_cols[1]:
-                    st.metric(
-                        "🥑 Saturated Fat",
-                        f"{additional['saturated_fat']['value']:.1f}g",
-                        f"{additional['saturated_fat']['daily_value']}% DV",
-                        help="Based on 20g daily saturated fat limit",
-                        delta_color="off"
-                    )
-                
-                # Item Breakdown
-                st.markdown('<p class="section-header">🍽️ Meal Components</p>', unsafe_allow_html=True)
-                
-                # Display each item in a modern card layout
-                components = nutrition.get("components", [])
-                for item in components:
-                    with st.container():
-                        # Item header with type icon
-                        type_icons = {
-                            "main_dish": "🍽️",
-                            "side_dish": "🥗",
-                            "beverage": "🥤",
-                            "condiment": "🧂"
-                        }
-                        icon = type_icons.get(item['type'], "🍴")
-                        
-                        # Item name and type
-                        st.markdown(f"### {icon} {item['name']}")
-                        st.caption(f"Type: {item['type'].replace('_', ' ').title()} | {item['serving']}")
-                        
-                        # Create three columns for the main nutrients
-                        c1, c2, c3 = st.columns(3)
-                        
-                        item_nutrition = item['nutrition']
-                        
-                        with c1:
-                            st.metric(
-                                "Calories",
-                                f"{item_nutrition['calories']} kcal",
-                                delta=None
-                            )
-                        
-                        with c2:
-                            st.metric(
-                                "Protein",
-                                f"{item_nutrition['protein']:.1f}g",
-                                delta=None
-                            )
-                        
-                        with c3:
-                            st.metric(
-                                "Carbs",
-                                f"{item_nutrition['carbs']:.1f}g",
-                                delta=None
-                            )
-                        
-                        # Additional details in expandable section
-                        with st.expander("More Details"):
-                            det1, det2 = st.columns(2)
-                            with det1:
-                                st.metric("Fat", f"{item_nutrition['fat']:.1f}g")
-                                st.metric("Fiber", f"{item_nutrition['fiber']:.1f}g")
-                            with det2:
-                                st.metric("Sugar", f"{item_nutrition['sugar']:.1f}g")
-                                st.metric("Saturated Fat", f"{item_nutrition['saturated_fat']:.1f}g")
-                            
-                            if item.get('diet_tags'):
-                                tags_html = " ".join([
-                                    f'<span class="diet-tag">{tag}</span>'
-                                    for tag in item['diet_tags']
-                                ])
-                                st.markdown(f"**Diet Tags:** <div>{tags_html}</div>", unsafe_allow_html=True)
-                        
-                        st.markdown("---")
-                
-                # Warnings and Suggestions
-                suggestions_col1, suggestions_col2 = st.columns(2)
-                
-                with suggestions_col1:
-                    warnings = nutrition_summary.get("warnings", [])
-                    if warnings:
-                        with st.expander("⚠️ Warnings", expanded=False):
-                            for warning in warnings:
-                                st.warning(warning, icon="⚠️")
 
-                with suggestions_col2:
-                    with st.expander("💡 AI Suggestions", expanded=False):
-                        with st.spinner("Getting personalized suggestions..."):
-                            tips = loop.run_until_complete(analyzer.suggest_improvements(nutrition))
-                            for tip in tips:
-                                st.write(tip)
+        # Analysis container
+        if not nutrition or not nutrition.get("nutrition_summary"):
+            st.error("⚠️ Could not analyze nutrition information")
+            return
 
-                # Chat section
-                st.markdown("---")
-                user_question = st.chat_input("💬 Ask about your meal (e.g., 'Is this good for bulking?')")
-                if user_question:
-                    # Compact chat UI
-                    with st.container():
-                        st.chat_message("user", avatar="🤔").write(user_question)
-                        chat_box = st.chat_message("assistant", avatar="🍽️")
-                        response_placeholder = chat_box.empty()
-                        
-                    async def stream_response():
-                        response_text = ""
-                        try:
-                            async for token in handle_chat(analyzer, user_question, nutrition):
-                                response_text += token
-                                response_placeholder.markdown(response_text)
-                        except Exception as e:
-                            logger.error(f"Error in stream_response: {str(e)}")
-                            response_placeholder.error(f"❌ Error: {str(e)}")
-                    
-                    # Run the streaming response
-                    try:
-                        loop = asyncio.get_event_loop()
-                        if loop.is_closed():
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                        loop.run_until_complete(stream_response())
-                    except Exception as e:
-                        logger.error(f"Error with event loop: {str(e)}")
-                        st.error("An error occurred while processing your request.")
+        nutrition_summary = nutrition["nutrition_summary"]
+        meal_info = nutrition.get("meal_info", {})
+
+        # Overview card
+        with st.container():
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            confidence = dish['confidence'] * 100
+            confidence_emoji = "🎯" if confidence >= 90 else "✨" if confidence >= 70 else "👀"
+            st.markdown(f"<div class='section-header'>{confidence_emoji} {dish['dish_name']} <span class='chip'>{confidence:.1f}%</span></div>", unsafe_allow_html=True)
+            cal_col, tags_col = st.columns([1, 2])
+            with cal_col:
+                cal_dv = nutrition_summary["calories"]["daily_value"]
+                st.metric(
+                    "Total Calories",
+                    f"{nutrition_summary['calories']['value']} kcal",
+                    f"{cal_dv}% Daily Value",
+                    help="Based on 2000 kcal daily requirement",
+                    delta_color="off"
+                )
+                serving_size = meal_info.get("serving_size", "N/A")
+                st.caption(f"📏 Serving: {serving_size}")
+            with tags_col:
+                diet_tags = nutrition_summary.get("diet_tags", [])
+                if diet_tags:
+                    tags_html = " ".join([f"<span class=\"diet-tag\">🏷️ {tag}</span>" for tag in diet_tags])
+                    st.markdown(f"<div class='mt-2'>{tags_html}</div>", unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # Macros card
+        with st.container():
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown('<div class="subsection-header">Macronutrients</div>', unsafe_allow_html=True)
+            macro_cols = st.columns(3)
+            macros = nutrition_summary["macros"]
+            with macro_cols[0]:
+                st.metric("🥩 Protein", f"{macros['protein']['value']:.1f}g", f"{macros['protein']['daily_value']}% DV")
+            with macro_cols[1]:
+                st.metric("🍚 Carbs", f"{macros['carbs']['value']:.1f}g", f"{macros['carbs']['daily_value']}% DV")
+            with macro_cols[2]:
+                st.metric("🫒 Fat", f"{macros['fat']['value']:.1f}g", f"{macros['fat']['daily_value']}% DV")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # Additional nutrients in collapsible section
+        with st.expander("Additional Nutrients"):
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            detail_cols = st.columns(2)
+            additional = nutrition_summary["additional"]
+            with detail_cols[0]:
+                st.metric("🌾 Fiber", f"{additional['fiber']['value']:.1f}g", f"{additional['fiber']['daily_value']}% DV")
+                st.metric("🍯 Sugar", f"{additional['sugar']['value']:.1f}g", "No DV established")
+            with detail_cols[1]:
+                st.metric("🥑 Saturated Fat", f"{additional['saturated_fat']['value']:.1f}g", f"{additional['saturated_fat']['daily_value']}% DV")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # Components list
+        components = nutrition.get("components", [])
+        if components:
+            st.markdown('<div class="section-header">🍱 Meal Components</div>', unsafe_allow_html=True)
+            for item in components:
+                st.markdown('<div class="card">', unsafe_allow_html=True)
+                type_icons = {"main_dish":"🍽️","side_dish":"🥗","beverage":"🥤","condiment":"🧂"}
+                icon = type_icons.get(item['type'], "🍴")
+                st.markdown(f"### {icon} {item['name']}")
+                st.caption(f"Type: {item['type'].replace('_', ' ').title()} | {item['serving']}")
+                c1, c2, c3 = st.columns(3)
+                n = item['nutrition']
+                c1.metric("Calories", f"{n['calories']} kcal")
+                c2.metric("Protein", f"{n['protein']:.1f}g")
+                c3.metric("Carbs", f"{n['carbs']:.1f}g")
+                with st.expander("More Details"):
+                    d1, d2 = st.columns(2)
+                    d1.metric("Fat", f"{n['fat']:.1f}g"); d1.metric("Fiber", f"{n['fiber']:.1f}g")
+                    d2.metric("Sugar", f"{n['sugar']:.1f}g"); d2.metric("Saturated Fat", f"{n['saturated_fat']:.1f}g")
+                    if item.get('diet_tags'):
+                        tags_html = " ".join([f"<span class='diet-tag'>{tag}</span>" for tag in item['diet_tags']])
+                        st.markdown(f"<div>**Diet Tags:** {tags_html}</div>", unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+
+        # Warnings & AI Suggestions
+        colw, cols = st.columns(2)
+        with colw:
+            warnings = nutrition_summary.get("warnings", [])
+            if warnings:
+                with st.expander("⚠️ Warnings", expanded=False):
+                    for warning in warnings:
+                        st.warning(warning, icon="⚠️")
+        with cols:
+            with st.expander("💡 AI Suggestions", expanded=False):
+                with st.spinner("Getting personalized suggestions..."):
+                    tips = loop.run_until_complete(analyzer.suggest_improvements(nutrition))
+                    for tip in tips:
+                        st.write(tip)
+
+        # Chat section - dock suggestions and input
+        st.markdown('<hr/>', unsafe_allow_html=True)
+        st.markdown('<div class="subsection-header">Ask about your meal</div>', unsafe_allow_html=True)
+        # Suggestion buttons styled as chips
+        suggestions = [
+            "Is this good for bulking?",
+            "How to reduce calories?",
+            "Is this balanced for dinner?",
+        ]
+        cols = st.columns(len(suggestions))
+        preset = None
+        for i, (col, s) in enumerate(zip(cols, suggestions)):
+            with col:
+                if st.button(s, key=f"suggest_{i}"):
+                    preset = s
+        user_question = preset or st.chat_input("💬 Ask about your meal")
+        if user_question:
+            with st.container():
+                st.chat_message("user", avatar="🤔").write(user_question)
+                chat_box = st.chat_message("assistant", avatar="🍽️")
+                response_placeholder = chat_box.empty()
+            async def stream_response():
+                response_text = ""
+                try:
+                    async for token in handle_chat(analyzer, user_question, nutrition):
+                        response_text += token
+                        response_placeholder.markdown(f"<div class='ai-reply'>{response_text}</div>", unsafe_allow_html=True)
+                except Exception as e:
+                    logger.error(f"Error in stream_response: {str(e)}")
+                    response_placeholder.error(f"❌ Error: {str(e)}")
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_closed():
+                    loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
+                loop.run_until_complete(stream_response())
+            except Exception as e:
+                logger.error(f"Error with event loop: {str(e)}")
+                st.error("An error occurred while processing your request.")
     else:
         st.info("Upload or capture a photo to begin analysis.")
 
