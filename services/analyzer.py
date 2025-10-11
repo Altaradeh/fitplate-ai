@@ -167,7 +167,15 @@ class FoodAnalyzerService:
                 return self._vision_cache[img_hash]
 
             schema = VisionAnalysisResponse.model_json_schema()
-            prompt = f"Analyze the meal image. Return valid JSON following this schema:\n{json.dumps(schema, indent=2)}"
+            prompt = f"""Analyze the meal image and identify all food items visible.
+
+IMPORTANT: Carefully count the number of servings/portions shown in the image:
+- If you see 1 plate/bowl/container, set quantity to "1 serving"
+- If you see 2 plates/bowls/containers with the same food, set quantity to "2 servings"
+- If you see multiple portions (e.g., 2 sandwiches, 3 tacos), include the count in quantity (e.g., "2 sandwiches", "3 tacos")
+
+Return valid JSON following this schema:
+{json.dumps(schema, indent=2)}"""
 
             _t = datetime.utcnow().isoformat()
             _s = time.perf_counter()
@@ -176,7 +184,7 @@ class FoodAnalyzerService:
             resp = await self.client.chat.completions.create(
                 model=self.VISION_MODEL,
                 messages=[
-                    {"role": "system", "content": "You are a precise food recognition AI. Return only valid JSON."},
+                    {"role": "system", "content": "You are a precise food recognition AI that accurately counts servings and portions. Return only valid JSON."},
                     {
                         "role": "user",
                         "content": [
