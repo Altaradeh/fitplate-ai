@@ -5,6 +5,20 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "Streamlit Debug",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "streamlit",
+      "args": ["run", "app/main.py"],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "POETRY_ACTIVE": "1"
+      },
+      "envFile": "${workspaceFolder}/.env"
+    },
+
+    {
       "name": "Python Debugger: Current File",
       "type": "debugpy",
       "request": "launch",

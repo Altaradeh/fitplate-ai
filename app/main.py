@@ -13,42 +13,32 @@ from PIL import Image
 
 from services.analyzer import FoodAnalyzerService
 
-# Create async loop for handling async operations
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
-# Load environment variables
 load_dotenv()
 
-# Initialize analyzer service with API key
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
     raise ValueError("OPENAI_API_KEY environment variable is not set")
 analyzer = FoodAnalyzerService(api_key=api_key)
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Apply nest_asyncio to make async work in Streamlit
 nest_asyncio.apply()
 
-# Load environment variables
 load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY") or os.getenv("openai_key")
 if not api_key:
     raise ValueError("No OpenAI API key found. Please set OPENAI_API_KEY in your .env file")
 
-# Initialize OpenAI client
 client = AsyncOpenAI(api_key=api_key)
 
-# Model configuration
 from app.config import VISION_MODEL, CHAT_MODEL
 
 async def verify_openai_access() -> Tuple[bool, Optional[str]]:
-    """Verify OpenAI API access and model availability."""
     try:
-        # Test with a simple completion
         response = await client.chat.completions.create(
             model=CHAT_MODEL,
             messages=[{"role": "user", "content": "Hi"}],
@@ -68,11 +58,8 @@ async def verify_openai_access() -> Tuple[bool, Optional[str]]:
     return False, "No response received from OpenAI API"
 
 async def process_image(image):
-    """Process an uploaded image using the analyzer service."""
     try:
-        # Use the analyzer service to analyze the meal
         analysis_result = await analyzer.analyze_meal(image)
-        
         if not analysis_result or analysis_result.get("status") == "error":
             error_msg = analysis_result.get("error", "Unknown error") if analysis_result else "No result"
             logger.error(f"Analysis failed: {error_msg}")
@@ -80,21 +67,13 @@ async def process_image(image):
                 "dish_name": "Unknown Dish",
                 "confidence": 0.0
             }, None
-
-        # Extract meal info from the new structure
         meal_info = analysis_result.get("meal_info", {})
         components = analysis_result.get("components", [])
-        
         dish_name = meal_info.get("name", "Unknown Dish")
         confidence = meal_info.get("confidence", 0.0)
-        
-        # If no meal_info but we have components, use the first component
         if dish_name == "Unknown Dish" and components:
             dish_name = components[0].get("name", "Unknown Dish")
-            
         logger.info(f"Successfully analyzed: {dish_name} (confidence: {confidence:.2f})")
-        
-        # Return the dish info and the full analysis result
         return {
             "dish_name": dish_name,
             "confidence": confidence
@@ -106,24 +85,28 @@ async def process_image(image):
             "confidence": 0.0
         }, None
 
-
-
 async def handle_chat(analyzer: FoodAnalyzerService, question: str, analysis_result: Dict[str, Any]):
-    """Handle the chat interaction using the analyzer service."""
+    import time
+    from datetime import datetime
     try:
+        _ts = datetime.utcnow().isoformat()
+        _start = time.perf_counter()
+        logger.info(f"[Chat][START] ts={_ts} question_len={len(question)}")
         stream = await analyzer.answer_question(question, analysis_result)
+        token_count = 0
         async for chunk in stream:
-            if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+            token_count += 1
+            if token_count == 1:
+                logger.info(f"[Chat][FIRST_TOKEN] received after {int((time.perf_counter() - _start) * 1000)}ms")
+            yield chunk
+        _dur_ms = int((time.perf_counter() - _start) * 1000)
+        logger.info(f"[Chat][END] dur_ms={_dur_ms} tokens={token_count}")
     except Exception as e:
-        logger.error(f"Chat error: {str(e)}")
+        _dur_ms = int((time.perf_counter() - _start) * 1000) if '_start' in locals() else 0
+        logger.error(f"[Chat][ERROR] dur_ms={_dur_ms} error={str(e)}")
         yield f"Sorry, I encountered an error: {str(e)}"
 
-
-
 def load_styles():
-    """Load Google Fonts, FontAwesome, and external CSS with theme hook."""
-    # Google Fonts + FontAwesome
     st.markdown(
         """
         <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -133,8 +116,6 @@ def load_styles():
         """,
         unsafe_allow_html=True,
     )
-
-    # Persisted theme from localStorage; fallback to system preference
     theme_js = """
     <script>
     (function(){
@@ -148,8 +129,6 @@ def load_styles():
     </script>
     """
     st.markdown(theme_js, unsafe_allow_html=True)
-
-    # Load external CSS
     try:
       with open(os.path.join(os.path.dirname(__file__), 'styles.css')) as f:
           st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
@@ -157,22 +136,16 @@ def load_styles():
       st.warning(f"Could not load styles.css: {e}")
 
 def render_meal_analysis(analysis_data):
-    """Render the meal analysis UI."""
     if analysis_data["status"] == "error":
         st.error(f"Analysis failed: {analysis_data['error']}")
         return
-
-    # Meal Overview
     with st.container():
         st.title("🍽️ Meal Analysis")
         meal = analysis_data["meal_info"]
         st.success(f"📸 Analyzed: {meal['name']} ({meal['confidence']:.1f}% confidence)")
-
-    # Main Nutrition Card
     with st.container():
+
         col1, col2 = st.columns([2, 3])
-        
-        # Calories and serving
         with col1:
             nutrition = analysis_data["nutrition_summary"]
             st.metric(
@@ -181,8 +154,6 @@ def render_meal_analysis(analysis_data):
                 f"{nutrition['calories']['daily_value']}% DV"
             )
             st.caption(f"Serving: {meal['serving_size']}")
-        
-        # Diet tags
         with col2:
             if nutrition["diet_tags"]:
                 tags_html = " ".join([
@@ -190,42 +161,29 @@ def render_meal_analysis(analysis_data):
                     for tag in nutrition["diet_tags"]
                 ])
                 st.markdown(f"<div style='margin-top: 0.5rem'>{tags_html}</div>", unsafe_allow_html=True)
-
-    # AI Insights
     insights = analysis_data["ai_insights"]
     with st.container():
         st.markdown("### 🤖 AI Insights")
-        
-        # Health Score
         score_color = "green" if insights["health_score"] >= 80 else "orange" if insights["health_score"] >= 60 else "red"
         st.markdown(f"**Health Score:** <span style='color: {score_color}'>{insights['health_score']}/100</span>", unsafe_allow_html=True)
-        
-            # AI-powered recommendations
         with st.spinner("Getting personalized suggestions..."):
             suggestions = loop.run_until_complete(analyzer.suggest_improvements(analysis_data))
             for suggestion in suggestions:
-                st.markdown(suggestion)        # Dietary Considerations
+                st.markdown(suggestion)
         if insights["dietary_considerations"]:
             with st.expander("📋 Dietary Considerations"):
                 for consideration in insights["dietary_considerations"]:
                     st.markdown(f"• {consideration}")
-
-    # Nutrition Details
     with st.container():
         st.markdown("### 📊 Nutrition Breakdown")
-        
-        # Macronutrients
         macro_cols = st.columns(3)
         macros = nutrition["macros"]
-        
         with macro_cols[0]:
             st.metric("Protein", f"{macros['protein']['value']:.1f}g", f"{macros['protein']['daily_value']}% DV")
         with macro_cols[1]:
             st.metric("Carbs", f"{macros['carbs']['value']:.1f}g", f"{macros['carbs']['daily_value']}% DV")
         with macro_cols[2]:
             st.metric("Fat", f"{macros['fat']['value']:.1f}g", f"{macros['fat']['daily_value']}% DV")
-
-    # Meal Components
     if analysis_data["components"]:
         st.markdown("### 🍱 Meal Components")
         for item in analysis_data["components"]:
@@ -239,19 +197,16 @@ def render_meal_analysis(analysis_data):
                     st.metric("Fat", f"{item['nutrition']['fat']:.1f}g")
 
 def theme_toggle():
-    """Render theme toggle and persist choice in localStorage + session_state."""
     if 'theme' not in st.session_state:
         st.session_state.theme = None
-    # Read theme from query param or session
     current = st.session_state.theme
     if not current:
-        current = 'dark'  # default visually
+        current = 'dark'
     colA, colB = st.columns([6,1])
     with colB:
         toggle = st.toggle("Dark Mode", value=(current=='dark'), label_visibility="collapsed")
     theme = 'dark' if toggle else 'light'
     st.session_state.theme = theme
-    # Apply to document
     st.markdown(
         f"""
         <script>
@@ -265,14 +220,8 @@ def theme_toggle():
     )
 
 def init_preferences():
-    """Initialize and hydrate user preferences from localStorage via JS bridge."""
     if 'prefs' not in st.session_state:
-        st.session_state.prefs = {
-            'goal': 'balanced',
-            'diet': 'none',
-            'calorie_target': None,
-        }
-    # Read from localStorage and update session_state (best-effort)
+        st.session_state.prefs = {'goal': 'balanced', 'diet': 'none', 'calorie_target': None}
     st.markdown(
         """
         <script>
@@ -295,21 +244,11 @@ def init_preferences():
         unsafe_allow_html=True,
     )
 
-
 def preferences_sidebar():
-    """Render preferences in sidebar and persist changes."""
     with st.sidebar:
         st.markdown("### 🎯 Preferences")
-        goal = st.selectbox(
-            "Goal",
-            ["balanced", "bulking", "cutting", "maintenance"],
-            index=["balanced","bulking","cutting","maintenance"].index(st.session_state.prefs.get('goal','balanced')),
-        )
-        diet = st.selectbox(
-            "Diet",
-            ["none", "keto", "vegan", "vegetarian", "mediterranean"],
-            index=["none","keto","vegan","vegetarian","mediterranean"].index(st.session_state.prefs.get('diet','none')),
-        )
+        goal = st.selectbox("Goal", ["balanced", "bulking", "cutting", "maintenance"], index=["balanced","bulking","cutting","maintenance"].index(st.session_state.prefs.get('goal','balanced')))
+        diet = st.selectbox("Diet", ["none", "keto", "vegan", "vegetarian", "mediterranean"], index=["none","keto","vegan","vegetarian","mediterranean"].index(st.session_state.prefs.get('diet','none')))
         cal = st.text_input("Daily calorie target (optional)", value=str(st.session_state.prefs.get('calorie_target') or ''))
         cal_val = None
         try:
@@ -317,7 +256,6 @@ def preferences_sidebar():
         except Exception:
             pass
         st.session_state.prefs.update({'goal': goal, 'diet': diet, 'calorie_target': cal_val})
-        # Persist to localStorage
         st.markdown(
             f"""
             <script>
@@ -331,81 +269,91 @@ def preferences_sidebar():
         )
 
 def main():
-    """Main application entry point."""
-    # Configure the page
-    st.set_page_config(
-        page_title="🍽️ Smart Dish Analyzer",
-        page_icon="🍽️",
-        layout="centered"
-    )
-    
-    # Load custom styles and theme
+    st.set_page_config(page_title="🍽️ Smart Dish Analyzer", page_icon="🍽️", layout="centered")
     load_styles()
-
-    # Hydrate preferences and render sidebar
     init_preferences()
     preferences_sidebar()
-
-    # Top bar with title and theme toggle
-    st.markdown('<div class="topbar">\
-      <div class="title">🍽️ FitPlate AI</div>\
-      <div class="theme-toggle">', unsafe_allow_html=True)
+    st.markdown('<div class="topbar"><div class="title">🍽️ FitPlate AI</div><div class="theme-toggle">', unsafe_allow_html=True)
     theme_toggle()
     st.markdown('</div></div>', unsafe_allow_html=True)
-
-    # Verify OpenAI access
     loop = asyncio.get_event_loop()
     access_ok, error_msg = loop.run_until_complete(verify_openai_access())
     if not access_ok:
         st.error(f"⚠️ OpenAI API Error: {error_msg}")
         st.info("Please check your OpenAI API key in the .env file and ensure you have access to GPT-4 Vision API.")
         return
-        
     st.write("Upload a meal photo or use your camera to analyze your food and chat about your goals.")
-
-    # Input methods
     tab_upload, tab_camera = st.tabs(["📂 Upload Photo", "📷 Take Photo"]) 
     image = None
     with tab_upload:
-        # Maintain uploader but rely on global CSS for visuals
-        uploaded_file = st.file_uploader("Upload a dish photo", type=["jpg", "jpeg", "png"])
+        uploaded_file = st.file_uploader("", type=["jpg", "jpeg", "png"])
         if uploaded_file:
             image = Image.open(uploaded_file)
     with tab_camera:
         camera_input = st.camera_input("Take a photo")
         if camera_input:
             image = Image.open(camera_input)
-
     if image:
-        # Preview
         with st.container():
             st.markdown('<div class="card image-preview">', unsafe_allow_html=True)
             st.image(image, caption="Your Dish", width='stretch')
             st.markdown('</div>', unsafe_allow_html=True)
-
-        # Progress indicator and skeletons
-        st.markdown('<div class="progress-line"><div class="bar"></div></div>', unsafe_allow_html=True)
-        st.markdown('<div class="ai-analyzing mt-2"><i class="fa-solid fa-wand-magic-sparkles"></i> Analyzing <span class="ai-dots"><span></span><span></span><span></span></span></div>', unsafe_allow_html=True)
-        # Skeleton cards
-        st.markdown('<div class="card"><div class="skel-grid">\
-          <div class="skel-line shimmer" style="height:24px"></div>\
-          <div class="skel-line shimmer" style="height:24px"></div>\
-          <div class="skel-line shimmer" style="height:24px"></div>\
-        </div></div>', unsafe_allow_html=True)
-
-        with st.spinner("Analyzing your dish..."):
-            loop = asyncio.get_event_loop()
-            dish, nutrition = loop.run_until_complete(process_image(image))
-
-        # Analysis container
+        
+        # Use session state to cache analysis results and avoid re-analyzing on chat interactions
+        # Create a unique key for this image
+        import hashlib
+        image_bytes = image.tobytes()
+        image_hash = hashlib.md5(image_bytes).hexdigest()
+        
+        # Check if we already have results for this image
+        if 'analysis_cache' not in st.session_state:
+            st.session_state.analysis_cache = {}
+        
+        if image_hash in st.session_state.analysis_cache:
+            # Use cached results
+            cached_data = st.session_state.analysis_cache[image_hash]
+            dish = cached_data['dish']
+            nutrition = cached_data['nutrition']
+            
+            # Check if suggestions exist in cache (for backward compatibility)
+            if 'suggestions' in cached_data:
+                suggestions = cached_data['suggestions']
+            else:
+                # Old cache format - fetch suggestions now
+                with st.spinner("Getting personalized suggestions..."):
+                    suggestions = loop.run_until_complete(analyzer.suggest_improvements(nutrition))
+                # Update cache with suggestions
+                st.session_state.analysis_cache[image_hash]['suggestions'] = suggestions
+        else:
+            # Perform analysis and cache results
+            loading_placeholder = st.empty()
+            with loading_placeholder.container():
+                st.markdown('<div class="progress-line"><div class="bar"></div></div>', unsafe_allow_html=True)
+                st.markdown('<div class="ai-analyzing mt-2"><i class="fa-solid fa-wand-magic-sparkles"></i> Analyzing <span class="ai-dots"><span></span><span></span><span></span></span></div>', unsafe_allow_html=True)
+                st.markdown('<div class="card"><div class="skel-grid"><div class="skel-line shimmer" style="height:24px"></div><div class="skel-line shimmer" style="height:24px"></div><div class="skel-line shimmer" style="height:24px"></div></div></div>', unsafe_allow_html=True)
+            with st.spinner("Analyzing your dish..."):
+                loop = asyncio.get_event_loop()
+                dish, nutrition = loop.run_until_complete(process_image(image))
+            loading_placeholder.empty()
+            
+            # Get AI suggestions (also needs API call, so cache it)
+            with st.spinner("Getting personalized suggestions..."):
+                suggestions = loop.run_until_complete(analyzer.suggest_improvements(nutrition))
+            
+            # Cache the results including suggestions
+            st.session_state.analysis_cache[image_hash] = {
+                'dish': dish,
+                'nutrition': nutrition,
+                'suggestions': suggestions
+            }
+        
+        # Always render the UI (using cached or fresh data)
         if not nutrition or not nutrition.get("nutrition_summary"):
             st.error("⚠️ Could not analyze nutrition information")
             return
-
+        
         nutrition_summary = nutrition["nutrition_summary"]
         meal_info = nutrition.get("meal_info", {})
-
-        # Overview card
         with st.container():
             st.markdown('<div class="card">', unsafe_allow_html=True)
             confidence = dish['confidence'] * 100
@@ -414,13 +362,7 @@ def main():
             cal_col, tags_col = st.columns([1, 2])
             with cal_col:
                 cal_dv = nutrition_summary["calories"]["daily_value"]
-                st.metric(
-                    "Total Calories",
-                    f"{nutrition_summary['calories']['value']} kcal",
-                    f"{cal_dv}% Daily Value",
-                    help="Based on 2000 kcal daily requirement",
-                    delta_color="off"
-                )
+                st.metric("Total Calories", f"{nutrition_summary['calories']['value']} kcal", f"{cal_dv}% Daily Value", help="Based on 2000 kcal daily requirement", delta_color="off")
                 serving_size = meal_info.get("serving_size", "N/A")
                 st.caption(f"📏 Serving: {serving_size}")
             with tags_col:
@@ -429,8 +371,6 @@ def main():
                     tags_html = " ".join([f"<span class=\"diet-tag\">🏷️ {tag}</span>" for tag in diet_tags])
                     st.markdown(f"<div class='mt-2'>{tags_html}</div>", unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
-
-        # Macros card
         with st.container():
             st.markdown('<div class="card">', unsafe_allow_html=True)
             st.markdown('<div class="subsection-header">Macronutrients</div>', unsafe_allow_html=True)
@@ -443,8 +383,6 @@ def main():
             with macro_cols[2]:
                 st.metric("🫒 Fat", f"{macros['fat']['value']:.1f}g", f"{macros['fat']['daily_value']}% DV")
             st.markdown('</div>', unsafe_allow_html=True)
-
-        # Additional nutrients in collapsible section
         with st.expander("Additional Nutrients"):
             st.markdown('<div class="card">', unsafe_allow_html=True)
             detail_cols = st.columns(2)
@@ -455,8 +393,6 @@ def main():
             with detail_cols[1]:
                 st.metric("🥑 Saturated Fat", f"{additional['saturated_fat']['value']:.1f}g", f"{additional['saturated_fat']['daily_value']}% DV")
             st.markdown('</div>', unsafe_allow_html=True)
-
-        # Components list
         components = nutrition.get("components", [])
         if components:
             st.markdown('<div class="section-header">🍱 Meal Components</div>', unsafe_allow_html=True)
@@ -479,8 +415,6 @@ def main():
                         tags_html = " ".join([f"<span class='diet-tag'>{tag}</span>" for tag in item['diet_tags']])
                         st.markdown(f"<div>**Diet Tags:** {tags_html}</div>", unsafe_allow_html=True)
                 st.markdown('</div>', unsafe_allow_html=True)
-
-        # Warnings & AI Suggestions
         colw, cols = st.columns(2)
         with colw:
             warnings = nutrition_summary.get("warnings", [])
@@ -490,51 +424,34 @@ def main():
                         st.warning(warning, icon="⚠️")
         with cols:
             with st.expander("💡 AI Suggestions", expanded=False):
-                with st.spinner("Getting personalized suggestions..."):
-                    tips = loop.run_until_complete(analyzer.suggest_improvements(nutrition))
-                    for tip in tips:
-                        st.write(tip)
-
-        # Chat section - dock suggestions and input
-        st.markdown('<hr/>', unsafe_allow_html=True)
-        st.markdown('<div class="subsection-header">Ask about your meal</div>', unsafe_allow_html=True)
-        # Suggestion buttons styled as chips
-        suggestions = [
-            "Is this good for bulking?",
-            "How to reduce calories?",
-            "Is this balanced for dinner?",
-        ]
-        cols = st.columns(len(suggestions))
-        preset = None
-        for i, (col, s) in enumerate(zip(cols, suggestions)):
-            with col:
-                if st.button(s, key=f"suggest_{i}"):
-                    preset = s
-        user_question = preset or st.chat_input("💬 Ask about your meal")
-        if user_question:
-            with st.container():
-                st.chat_message("user", avatar="🤔").write(user_question)
-                chat_box = st.chat_message("assistant", avatar="🍽️")
-                response_placeholder = chat_box.empty()
-            async def stream_response():
-                response_text = ""
-                try:
-                    async for token in handle_chat(analyzer, user_question, nutrition):
-                        response_text += token
-                        response_placeholder.markdown(f"<div class='ai-reply'>{response_text}</div>", unsafe_allow_html=True)
-                except Exception as e:
-                    logger.error(f"Error in stream_response: {str(e)}")
-                    response_placeholder.error(f"❌ Error: {str(e)}")
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_closed():
-                    loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
-                loop.run_until_complete(stream_response())
-            except Exception as e:
-                logger.error(f"Error with event loop: {str(e)}")
-                st.error("An error occurred while processing your request.")
-    else:
-        st.info("Upload or capture a photo to begin analysis.")
+                # Use cached suggestions (already fetched during analysis)
+                for tip in suggestions:
+                    st.write(tip)
+        
+        # Chat section - always available after analysis (both cached and fresh)
+        if nutrition:
+            st.markdown('<hr/>', unsafe_allow_html=True)
+            st.markdown('<div class="subsection-header">Ask about your meal</div>', unsafe_allow_html=True)
+            chat_suggestions = ["Is this good for bulking?", "How to reduce calories?", "Is this balanced for dinner?"]
+            cols = st.columns(len(chat_suggestions))
+            preset = None
+            for i, (col, s) in enumerate(zip(cols, chat_suggestions)):
+                with col:
+                    if st.button(s, key=f"suggest_{i}"):
+                        preset = s
+            
+            # Always show chat input, but use preset if button was clicked
+            chat_input = st.chat_input("💬 Ask about your meal")
+            user_question = preset if preset else chat_input
+            
+            if user_question:
+                with st.chat_message("user", avatar="🤔"):
+                    st.write(user_question)
+                with st.chat_message("assistant", avatar="🍽️"):
+                    async def stream_answer():
+                        async for token in handle_chat(analyzer, user_question, nutrition):
+                            yield token
+                    st.write_stream(stream_answer())
 
 if __name__ == "__main__":
     main()
