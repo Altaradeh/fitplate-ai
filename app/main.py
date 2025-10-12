@@ -3,12 +3,13 @@ import json
 import logging
 import os
 import re
+import sys
+import argparse
 from typing import Optional, Tuple, List, Dict, Any
 
 import nest_asyncio
 import streamlit as st
 from dotenv import load_dotenv
-from openai import AsyncOpenAI, OpenAIError
 from PIL import Image
 
 from services.analyzer import FoodAnalyzerService
@@ -18,10 +19,29 @@ asyncio.set_event_loop(loop)
 
 load_dotenv()
 
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    raise ValueError("OPENAI_API_KEY environment variable is not set")
-analyzer = FoodAnalyzerService(api_key=api_key)
+# Optional demo mode using a local JSON file (no API calls)
+def _parse_args():
+    try:
+        parser = argparse.ArgumentParser(add_help=False)
+        parser.add_argument("--data-json", dest="data_json", default=None)
+        args, _ = parser.parse_known_args(sys.argv[1:])
+        return args
+    except Exception:
+        class _A: data_json=None
+        return _A()
+
+_args = _parse_args()
+DEMO_JSON_PATH = os.getenv("UX_DATA_JSON") or (_args.data_json if hasattr(_args, "data_json") else None)
+DEMO_MODE = bool(DEMO_JSON_PATH)
+DEMO_DATA: Optional[Dict[str, Any]] = None
+if DEMO_MODE:
+    try:
+        with open(DEMO_JSON_PATH, "r", encoding="utf-8") as f:
+            DEMO_DATA = json.load(f)
+    except Exception as e:
+        DEMO_DATA = None
+        DEMO_MODE = False
+        logging.getLogger(__name__).error(f"Failed to load demo JSON: {e}")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -30,15 +50,33 @@ nest_asyncio.apply()
 
 load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY") or os.getenv("openai_key")
-if not api_key:
-    raise ValueError("No OpenAI API key found. Please set OPENAI_API_KEY in your .env file")
 
-client = AsyncOpenAI(api_key=api_key)
+# Only set up OpenAI client/analyzer when not in demo mode
+client = None
+OpenAIError = Exception  # fallback type
+analyzer = None
+if not DEMO_MODE:
+    try:
+        from openai import AsyncOpenAI, OpenAIError as _OpenAIError  # type: ignore
+        OpenAIError = _OpenAIError
+        if not api_key:
+            raise ValueError("No OpenAI API key found. Please set OPENAI_API_KEY in your .env file")
+        client = AsyncOpenAI(api_key=api_key)
+        analyzer = FoodAnalyzerService(api_key=api_key)
+    except Exception as e:
+        # If anything fails, remain without client and handle later
+        logging.getLogger(__name__).error(f"OpenAI setup failed: {e}")
 
 from app.config import VISION_MODEL, CHAT_MODEL
 
 async def verify_openai_access() -> Tuple[bool, Optional[str]]:
+    if DEMO_MODE:
+        # In demo mode we explicitly avoid any network calls
+        logger.info("Demo mode enabled: skipping OpenAI verification")
+        return True, None
     try:
+        if client is None:
+            return False, "OpenAI client not initialized"
         response = await client.chat.completions.create(
             model=CHAT_MODEL,
             messages=[{"role": "user", "content": "Hi"}],
@@ -59,6 +97,14 @@ async def verify_openai_access() -> Tuple[bool, Optional[str]]:
 
 async def process_image(image):
     try:
+        if DEMO_MODE and DEMO_DATA:
+            meal = DEMO_DATA.get("meal_info", {})
+            dish_name = meal.get("name", "Unknown Dish")
+            confidence = meal.get("confidence", 0.0)
+            return {"dish_name": dish_name, "confidence": confidence}, DEMO_DATA
+
+        if analyzer is None:
+            raise RuntimeError("Analyzer not available")
         analysis_result = await analyzer.analyze_meal(image)
         if not analysis_result or analysis_result.get("status") == "error":
             error_msg = analysis_result.get("error", "Unknown error") if analysis_result else "No result"
@@ -92,7 +138,18 @@ async def handle_chat(analyzer: FoodAnalyzerService, question: str, analysis_res
         _ts = datetime.utcnow().isoformat()
         _start = time.perf_counter()
         logger.info(f"[Chat][START] ts={_ts} question_len={len(question)}")
-        stream = await analyzer.answer_question(question, analysis_result)
+        if DEMO_MODE:
+            async def _demo_stream():
+                msg = (
+                    "✅ SUMMARY: Looks balanced with solid protein.\n\n"
+                    "📘 DETAILS: Consider more veggies and keep sauces light."
+                )
+                for i in range(0, len(msg), 24):
+                    yield msg[i:i+24]
+                    await asyncio.sleep(0.02)
+            stream = _demo_stream()
+        else:
+            stream = await analyzer.answer_question(question, analysis_result)
         token_count = 0
         async for chunk in stream:
             token_count += 1
@@ -282,6 +339,8 @@ def main():
         st.error(f"⚠️ OpenAI API Error: {error_msg}")
         st.info("Please check your OpenAI API key in the .env file and ensure you have access to GPT-4 Vision API.")
         return
+    if DEMO_MODE:
+        st.info(f"Using local demo data: {DEMO_JSON_PATH}")
     st.write("Upload a meal photo or use your camera to analyze your food and chat about your goals.")
     tab_upload, tab_camera = st.tabs(["📂 Upload Photo", "📷 Take Photo"]) 
     image = None
@@ -320,8 +379,12 @@ def main():
                 suggestions = cached_data['suggestions']
             else:
                 # Old cache format - fetch suggestions now
-                with st.spinner("Getting personalized suggestions..."):
-                    suggestions = loop.run_until_complete(analyzer.suggest_improvements(nutrition))
+                if DEMO_MODE and nutrition and nutrition.get('ai_insights'):
+                    insights = nutrition.get('ai_insights', {})
+                    suggestions = insights.get('improvements') or insights.get('suggestions') or []
+                else:
+                    with st.spinner("Getting personalized suggestions..."):
+                        suggestions = loop.run_until_complete(analyzer.suggest_improvements(nutrition))
                 # Update cache with suggestions
                 st.session_state.analysis_cache[image_hash]['suggestions'] = suggestions
         else:
@@ -336,9 +399,13 @@ def main():
                 dish, nutrition = loop.run_until_complete(process_image(image))
             loading_placeholder.empty()
             
-            # Get AI suggestions (also needs API call, so cache it)
-            with st.spinner("Getting personalized suggestions..."):
-                suggestions = loop.run_until_complete(analyzer.suggest_improvements(nutrition))
+            # Get AI suggestions: in demo mode use local data; otherwise call service
+            if DEMO_MODE and nutrition and nutrition.get('ai_insights'):
+                insights = nutrition.get('ai_insights', {})
+                suggestions = insights.get('improvements') or insights.get('suggestions') or []
+            else:
+                with st.spinner("Getting personalized suggestions..."):
+                    suggestions = loop.run_until_complete(analyzer.suggest_improvements(nutrition))
             
             # Cache the results including suggestions
             st.session_state.analysis_cache[image_hash] = {
@@ -354,6 +421,12 @@ def main():
         
         nutrition_summary = nutrition["nutrition_summary"]
         meal_info = nutrition.get("meal_info", {})
+        # If running with demo JSON, ensure dish variable matches demo
+        if DEMO_MODE and nutrition.get("meal_info"):
+            dish = {
+                "dish_name": nutrition["meal_info"].get("name", dish.get("dish_name", "Unknown Dish")),
+                "confidence": nutrition["meal_info"].get("confidence", dish.get("confidence", 0.0)),
+            }
         with st.container():
             st.markdown('<div class="card">', unsafe_allow_html=True)
             confidence = dish['confidence'] * 100

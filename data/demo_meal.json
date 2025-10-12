@@ -1,0 +1,92 @@
+{
+  "status": "success",
+  "meal_info": {
+    "name": "Chicken, Rice and Broccoli",
+    "confidence": 0.86,
+    "serving_size": "1 plate"
+  },
+  "nutrition_summary": {
+    "calories": { "value": 519, "daily_value": 26 },
+    "macros": {
+      "protein": { "value": 39.7, "daily_value": 79 },
+      "carbs": { "value": 56.2, "daily_value": 25 },
+      "fat": { "value": 14.4, "daily_value": 22 }
+    },
+    "additional": {
+      "fiber": { "value": 8.6, "daily_value": 30 },
+      "sugar": { "value": 2.9, "warning": false },
+      "saturated_fat": { "value": 3.8, "daily_value": 19 }
+    },
+    "diet_tags": ["balanced", "whole-foods", "high-protein"],
+    "warnings": ["Watch sodium if using sauces."]
+  },
+  "components": [
+    {
+      "name": "Grilled Chicken",
+      "type": "main_dish",
+      "serving": "150 g",
+      "nutrition": {
+        "calories": 248,
+        "protein": 31.0,
+        "carbs": 0.0,
+        "fat": 12.0,
+        "fiber": 0.0,
+        "sugar": 0.0,
+        "saturated_fat": 3.3
+      },
+      "diet_tags": ["high-protein", "gluten-free"]
+    },
+    {
+      "name": "Brown Rice",
+      "type": "side_dish",
+      "serving": "1 cup",
+      "nutrition": {
+        "calories": 216,
+        "protein": 5.0,
+        "carbs": 45.0,
+        "fat": 1.8,
+        "fiber": 3.5,
+        "sugar": 0.7,
+        "saturated_fat": 0.4
+      },
+      "diet_tags": ["whole-grain", "vegan"]
+    },
+    {
+      "name": "Steamed Broccoli",
+      "type": "side_dish",
+      "serving": "1 cup",
+      "nutrition": {
+        "calories": 55,
+        "protein": 3.7,
+        "carbs": 11.2,
+        "fat": 0.6,
+        "fiber": 5.1,
+        "sugar": 2.2,
+        "saturated_fat": 0.1
+      },
+      "diet_tags": ["high-fiber", "vegan"]
+    }
+  ],
+  "ai_insights": {
+    "recommendations": [
+      "Add a small salad for micronutrients.",
+      "Consider olive oil drizzle for healthy fats."
+    ],
+    "health_score": 82,
+    "meal_type": "dinner",
+    "dietary_considerations": ["balanced", "high-protein"],
+    "meal_rating": 8,
+    "suggestions": [
+      "Swap white rice with brown or quinoa to boost fiber.",
+      "Add a colorful veggie for vitamins (bell peppers, spinach)."
+    ],
+    "improvements": [
+      "Reduce added sauces high in sugar.",
+      "Aim for 25–35g protein for satiety."
+    ],
+    "positive_aspects": [
+      "Great lean protein choice.",
+      "Whole grains support steady energy."
+    ]
+  }
+}
