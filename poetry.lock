@@ -420,20 +420,6 @@ files = [
 ]
 
 [[package]]
-name = "dotenv"
-version = "0.9.9"
-description = "Deprecated package"
-optional = false
-python-versions = "*"
-groups = ["main"]
-files = [
-    {file = "dotenv-0.9.9-py2.py3-none-any.whl", hash = "sha256:29cf74a087b31dafdb5a446b6d7e11cbce8ed2741540e2339c69fbef92c94ce9"},
-]
-
-[package.dependencies]
-python-dotenv = "*"
-
-[[package]]
 name = "exceptiongroup"
 version = "1.3.0"
 description = "Backport of PEP 654 (exception groups)"
@@ -2545,4 +2531,4 @@ propcache = ">=0.2.1"
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10"
-content-hash = "654de838582b01800f563a52998d8799e7a3afc325e033a1998b87205b2d3267"
+content-hash = "73c6a308354afd735ade8a5dfffe984fb83fcb406693219834640e3ba142775f"
