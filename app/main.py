@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI, OpenAIError
 from PIL import Image
 
-from services.analyzer import FoodAnalyzerService
+from analyzer import FoodAnalyzerService
 
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
