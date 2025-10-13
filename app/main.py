@@ -10,6 +10,8 @@ import streamlit as st
 from dotenv import load_dotenv
 from openai import AsyncOpenAI, OpenAIError
 from PIL import Image
+import io
+import time
 
 # Ensure project root is on sys.path so 'services' can be imported when run from different CWDs
 import sys as _sys
@@ -336,20 +338,47 @@ def main():
     st.write("Upload a meal photo or use your camera to analyze your food and chat about your goals.")
     tab_upload, tab_camera = st.tabs(["📂 Upload Photo", "📷 Take Photo"]) 
     image = None
+    # Initialize tracking for image sources
+    if 'last_upload_ts' not in st.session_state:
+        st.session_state.last_upload_ts = 0.0
+    if 'last_camera_ts' not in st.session_state:
+        st.session_state.last_camera_ts = 0.0
     with tab_upload:
         uploaded_file = st.file_uploader("", type=["jpg", "jpeg", "png"])
-        if uploaded_file:
-            image = Image.open(uploaded_file)
+        if uploaded_file is not None:
+            up_bytes = uploaded_file.getvalue()
+            up_hash = __import__('hashlib').md5(up_bytes).hexdigest()
+            if st.session_state.get('last_upload_hash') != up_hash:
+                st.session_state.last_upload_ts = time.time()
+                st.session_state.last_upload_hash = up_hash
+                st.session_state.upload_bytes = up_bytes
     with tab_camera:
         camera_input = st.camera_input("Take a photo")
-        if camera_input:
-            image = Image.open(camera_input)
-    if image:
+        if camera_input is not None:
+            cam_bytes = camera_input.getvalue()
+            cam_hash = __import__('hashlib').md5(cam_bytes).hexdigest()
+            if st.session_state.get('last_camera_hash') != cam_hash:
+                st.session_state.last_camera_ts = time.time()
+                st.session_state.last_camera_hash = cam_hash
+                st.session_state.camera_bytes = cam_bytes
+
+    # Decide which source to use based on latest timestamp
+    chosen_source = None
+    if st.session_state.last_upload_ts or st.session_state.last_camera_ts:
+        chosen_source = 'upload' if st.session_state.last_upload_ts >= st.session_state.last_camera_ts else 'camera'
+
+    selected_bytes = None
+    if chosen_source == 'upload' and st.session_state.get('upload_bytes'):
+        selected_bytes = st.session_state.upload_bytes
+    elif chosen_source == 'camera' and st.session_state.get('camera_bytes'):
+        selected_bytes = st.session_state.camera_bytes
+
+    if selected_bytes:
+        image = Image.open(io.BytesIO(selected_bytes))
         # Use session state to cache analysis results and avoid re-analyzing on chat interactions
         # Create a unique key for this image
         import hashlib
-        image_bytes = image.tobytes()
-        image_hash = hashlib.md5(image_bytes).hexdigest()
+        image_hash = hashlib.md5(selected_bytes).hexdigest()
         
         # Check if we already have results for this image
         if 'analysis_cache' not in st.session_state:
