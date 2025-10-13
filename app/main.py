@@ -11,7 +11,13 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI, OpenAIError
 from PIL import Image
 
-from analyzer import FoodAnalyzerService
+# Ensure project root is on sys.path so 'services' can be imported when run from different CWDs
+import sys as _sys
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in _sys.path:
+    _sys.path.insert(0, _ROOT)
+
+from services.analyzer import FoodAnalyzerService
 
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
