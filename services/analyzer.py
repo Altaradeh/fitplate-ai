@@ -151,40 +151,103 @@ class FoodAnalyzerService:
             return {"status": "error", "error": str(e)}
 
     async def _analyze_image(self, image: Image.Image) -> DishAnalysis:
-        try:
-            img = image.copy()
-            if img.width > 512:
-                ratio = 512 / img.width
-                img = img.resize((512, int(img.height * ratio)))
+        """Run the vision model on the provided meal image and return a DishAnalysis.
 
+        Improvements implemented here (method-local only):
+        - EXIF orientation normalization & RGB conversion
+        - Constrain both dimensions (<=512) using thumbnail
+        - Optimized JPEG (quality 85, optimize, progressive) for smaller payload
+        - Versioned cache key (allows future prompt/schema evolution)
+        - More explicit, compact, rule-based prompt with examples & prohibitions
+        - Defensive model response validation (empty choices/content)
+        - Structured logging including hash, size, items count
+        - Time stamp uses UTC without incorrect timezone attribute usage
+        """
+        try:
+            # Import inside method to respect the 'do not change outside' requirement.
+            try:
+                from PIL import ImageOps  # type: ignore
+            except Exception:  # pragma: no cover - optional enhancement
+                ImageOps = None  # fallback if not available
+
+            # 1. Normalize & copy
+            img = image.copy()
+            if ImageOps:
+                try:
+                    img = ImageOps.exif_transpose(img)
+                except Exception:
+                    pass
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+
+            # 2. Resize bounding box (maintain aspect ratio)
+            max_dim = 512
+            if img.width > max_dim or img.height > max_dim:
+                img.thumbnail((max_dim, max_dim))
+
+            # 3. Encode JPEG
             buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=85)
+            try:
+                img.save(buf, format="JPEG", quality=85, optimize=True, progressive=True)
+            except Exception:
+                # Fallback if optimize/progressive not supported
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=85)
             data = buf.getvalue()
             img_b64 = base64.b64encode(data).decode()
-            img_hash = hashlib.md5(data).hexdigest()
 
-            if img_hash in self._vision_cache:
-                return self._vision_cache[img_hash]
+            # 4. Versioned cache key (prompt/schema changes shouldn't reuse prior results)
+            prompt_version = "v2"  # bump when materially changing prompt instructions
+            base_hash = hashlib.md5(data).hexdigest()
+            cache_key = f"{prompt_version}:{base_hash}:{self.VISION_MODEL}"
+            if cache_key in self._vision_cache:
+                return self._vision_cache[cache_key]
 
+            # 5. Build compact schema & prompt
             schema = VisionAnalysisResponse.model_json_schema()
-            prompt = f"""Analyze the meal image and identify all food items visible.
+            # Minify schema to save tokens
+            schema_json = json.dumps(schema, separators=(",", ":"))
 
-IMPORTANT: Carefully count the number of servings/portions shown in the image:
-- If you see 1 plate/bowl/container, set quantity to "1 serving"
-- If you see 2 plates/bowls/containers with the same food, set quantity to "2 servings"
-- If you see multiple portions (e.g., 2 sandwiches, 3 tacos), include the count in quantity (e.g., "2 sandwiches", "3 tacos")
+            rules = (
+                "Rules:\n"
+                "1. Identify only visible, distinct food/drink items (no hidden/inferred ingredients).\n"
+                "2. Count identical discrete items precisely (e.g., '3 tacos').\n"
+                "3. Single dish in one plate/bowl => quantity '1 serving'.\n"
+                "4. Multiple identical plates/bowls => 'N servings'.\n"
+                "5. Confidence: 0.00–1.00 (two decimals). If unsure, use generic label + low confidence.\n"
+                "6. No commentary, no markdown, no code fences — JSON ONLY.\n"
+                "7. Do not list composite dish ingredients separately unless plated separately.\n"
+                "8. If unsure of name, use 'unknown <category>' (e.g., 'unknown vegetable').\n"
+            )
 
-Return valid JSON following this schema:
-{json.dumps(schema, indent=2)}"""
+            examples = (
+                "Examples:\n"
+                "A: One plate spaghetti -> quantity '1 serving'.\n"
+                "B: Three identical pancakes -> '3 pancakes'.\n"
+                "C: Two bowls same soup -> '2 servings'.\n"
+                "Bad (DO NOT): Extra text, markdown fences, inferred hidden ingredients.\n"
+            )
 
-            _t = datetime.utcnow().isoformat()
-            _s = time.perf_counter()
-            logger.info(f"[OpenAI][START] ts={_t} step=vision model={self.VISION_MODEL} temp={self.JSON_TEMPERATURE} max_tokens={self.JSON_MAX_TOKENS} img_w={img.width} img_h={img.height}")
+            prompt = (
+                "Analyze this meal image. Provide structured JSON only.\n\n" +
+                rules + "\n" + examples +
+                "Schema (all required):" + schema_json
+            )
+
+            # 6. Call model
+            ts = datetime.utcnow().isoformat() + "Z"
+            start = time.perf_counter()
+            logger.info(
+                "[OpenAI][START] ts=%s step=vision model=%s temp=%s max_tokens=%s w=%d h=%d bytes=%d hash=%s",
+                ts, self.VISION_MODEL, self.JSON_TEMPERATURE, self.JSON_MAX_TOKENS, img.width, img.height, len(data), cache_key
+            )
 
             resp = await self.client.chat.completions.create(
                 model=self.VISION_MODEL,
                 messages=[
-                    {"role": "system", "content": "You are a precise food recognition AI that accurately counts servings and portions. Return only valid JSON."},
+                    {"role": "system", "content": (
+                        "You are a precise food recognition AI. Return ONLY valid JSON; no markdown; comply strictly with the provided schema."
+                    )},
                     {
                         "role": "user",
                         "content": [
@@ -198,40 +261,97 @@ Return valid JSON following this schema:
                 max_tokens=self.JSON_MAX_TOKENS,
             )
 
-            dur = int((time.perf_counter() - _s) * 1000)
-            logger.info(f"[OpenAI][END] step=vision dur_ms={dur}")
+            duration_ms = int((time.perf_counter() - start) * 1000)
 
-            raw = self._clean_ai_response(resp.choices[0].message.content)
+            # 7. Defensive validation
+            if not getattr(resp, "choices", None) or not resp.choices:
+                raise ValueError("Empty response choices from vision model")
+            first = resp.choices[0]
+            content = getattr(getattr(first, "message", None), "content", None)
+            if not content:
+                raise ValueError("Empty message content from vision model")
+
+            raw = self._clean_ai_response(content)
             parsed = VisionAnalysisResponse.model_validate_json(raw, strict=True)
             result = DishAnalysis(items=parsed.items)
-            self._vision_cache[img_hash] = result
+            self._vision_cache[cache_key] = result
+
+            logger.info(
+                "[OpenAI][END] step=vision dur_ms=%d hash=%s items=%d", duration_ms, cache_key, len(result.items)
+            )
             return result
         except Exception as e:
-            logger.error(f"Error in _analyze_image: {e}")
+            logger.error("Error in _analyze_image: %s", e, exc_info=True)
             return DishAnalysis(items=[VisionFoodItem(name="Unidentified Food", type="main_dish", quantity="1 serving", confidence=0.0)])
 
     async def _analyze_nutrition(self, items: List[FoodItem]) -> NutritionAnalysis:
+        """Analyze nutrition for a list of food items via LLM JSON response.
 
+        Enhancements (method-local only):
+        - Versioned cache key (separates prompt/schema evolution)
+        - Compact minified schema & payload to reduce tokens
+        - Explicit rule-based prompt with examples & prohibitions
+        - Defensive response validation for empty choices/content
+        - Structured logging (hash, item count, duration)
+        - UTC timestamp suffix 'Z'
+        Returns NutritionAnalysis or None on failure (unchanged externally).
+        """
         try:
-            payload = [{"name": i.name, "type": i.type, "quantity": getattr(i, "quantity", "1 serving")} for i in items]
-            key = json.dumps(payload, sort_keys=True)
-            if key in self._nutrition_cache:
-                return self._nutrition_cache[key]
+            # 1. Build normalized payload (stable ordering for cache key)
+            payload = [
+                {
+                    "name": i.name,
+                    "type": i.type,
+                    "quantity": getattr(i, "quantity", "1 serving")
+                }
+                for i in items
+            ]
 
-            prompt = f"""
-            Analyze these items and return precise nutritional info:
-            {json.dumps(payload, indent=2)}
-            JSON schema: {json.dumps(NutritionAnalysisResponse.model_json_schema(), indent=2)}
-            """
+            # 2. Versioned cache key (update version when prompt/schema materially changes)
+            prompt_version = "nutri_v2"
+            key_material = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+            key_hash = hashlib.md5(key_material.encode()).hexdigest()
+            cache_key = f"{prompt_version}:{key_hash}:{self.CHAT_MODEL}"
+            if cache_key in self._nutrition_cache:
+                return self._nutrition_cache[cache_key]
 
-            _t = datetime.utcnow().isoformat()
-            _s = time.perf_counter()
-            logger.info(f"[OpenAI][START] ts={_t} step=nutrition model={self.CHAT_MODEL} temp=0.1 max_tokens=1500")
+            # 3. Minified schema
+            schema = NutritionAnalysisResponse.model_json_schema()
+            schema_json = json.dumps(schema, separators=(",", ":"))
+
+            # 4. Rules & examples (concise)
+            rules = (
+                "Rules:\n"
+                "1. Use provided item names; do not invent new items.\n"
+                "2. Estimate realistic serving-based nutrition macros & calories.\n"
+                "3. Keep numeric units consistent (grams for macros, calories for energy).\n"
+                "4. If uncertain, provide best estimate; never leave required fields blank.\n"
+                "5. Do NOT add commentary, markdown, or extra keys. JSON ONLY.\n"
+                "6. All required schema fields must be present.\n"
+            )
+            examples = (
+                "Example item input -> output note: '2 tacos' should reflect combined nutrition for both tacos.\n"
+                "If quantity has explicit count (e.g., '3 pancakes'), scale nutrition accordingly.\n"
+            )
+
+            # 5. Prompt assembly (payload inline, minified)
+            prompt = (
+                "Analyze these meal components and return ONLY valid JSON matching the schema.\n" +
+                rules + examples +
+                "Schema:" + schema_json + "\nItems:" + key_material
+            )
+
+            ts = datetime.utcnow().isoformat() + "Z"
+            start = time.perf_counter()
+            logger.info(
+                "[OpenAI][START] ts=%s step=nutrition model=%s temp=%s max_tokens=%s items=%d hash=%s",
+                ts, self.CHAT_MODEL, self.JSON_TEMPERATURE, self.JSON_MAX_TOKENS, len(payload), cache_key
+            )
 
             resp = await self.client.chat.completions.create(
                 model=self.CHAT_MODEL,
                 messages=[
-                    {"role": "system", "content": "You are a nutrition scientist. Return only valid JSON."},
+                    {"role": "system", "content": "You are a meticulous nutrition scientist. Return ONLY JSON conforming to the schema."},
                     {"role": "user", "content": prompt},
                 ],
                 response_format={"type": "json_object"},
@@ -239,71 +359,112 @@ Return valid JSON following this schema:
                 max_tokens=self.JSON_MAX_TOKENS,
             )
 
-            dur = int((time.perf_counter() - _s) * 1000)
-            logger.info(f"[OpenAI][END] step=nutrition dur_ms={dur}")
+            duration_ms = int((time.perf_counter() - start) * 1000)
 
-            raw = self._clean_ai_response(resp.choices[0].message.content)
+            # Defensive checks
+            if not getattr(resp, "choices", None) or not resp.choices:
+                raise ValueError("Empty response choices from nutrition model")
+            first = resp.choices[0]
+            content = getattr(getattr(first, "message", None), "content", None)
+            if not content:
+                raise ValueError("Empty message content from nutrition model")
+
+            raw = self._clean_ai_response(content)
             parsed = NutritionAnalysisResponse.model_validate_json(raw)
             result = parsed.to_nutrition_analysis()
-            self._nutrition_cache[key] = result
+            self._nutrition_cache[cache_key] = result
+
+            logger.info(
+                "[OpenAI][END] step=nutrition dur_ms=%d hash=%s items=%d", duration_ms, cache_key, len(result.items if hasattr(result, 'items') else [])
+            )
             return result
         except Exception as e:
-            logger.error(f"Error in _analyze_nutrition: {e}")
+            logger.error("Error in _analyze_nutrition: %s", e, exc_info=True)
             return None
     async def _get_recommendations(self, nutrition: Optional[Any]) -> Dict[str, Any]:
-        try:
-            sys = "You are a nutrition coach giving concise, factual meal feedback."
+        """Generate meal recommendations and qualitative feedback.
 
-            # Safely handle dict or NutritionAnalysis
+        Enhancements (method-local only):
+        - Rule-based prompt with explicit output contract
+        - Versioned cache (to avoid recomputation for identical macro profiles)
+        - Defensive validation of model response
+        - Structured logging with hash, duration, and macro summary
+        - Consistent UTC timestamp with 'Z'
+        Caches by a hash of macro summary + prompt version.
+        """
+        try:
+            # 1. Normalize nutrition summary into a simple object (calories, macros)
             if nutrition and hasattr(nutrition, "combined"):
                 combined = nutrition.combined
             elif isinstance(nutrition, dict) and "nutrition_summary" in nutrition:
                 ns = nutrition["nutrition_summary"]
                 combined = type("obj", (), {
-                    "calories": ns["calories"]["value"],
-                    "protein_g": ns["macros"]["protein"]["value"],
-                    "carbs_g": ns["macros"]["carbs"]["value"],
-                    "fat_g": ns["macros"]["fat"]["value"],
+                    "calories": ns.get("calories", {}).get("value", 0),
+                    "protein_g": ns.get("macros", {}).get("protein", {}).get("value", 0),
+                    "carbs_g": ns.get("macros", {}).get("carbs", {}).get("value", 0),
+                    "fat_g": ns.get("macros", {}).get("fat", {}).get("value", 0),
                 })()
             else:
-                combined = type("obj", (), {
-                    "calories": 0, "protein_g": 0, "carbs_g": 0, "fat_g": 0
-                })()
+                combined = type("obj", (), {"calories": 0, "protein_g": 0, "carbs_g": 0, "fat_g": 0})()
 
             meal_summary = (
-                f"Calories {combined.calories} kcal, "
-                f"Protein {combined.protein_g}g, "
-                f"Carbs {combined.carbs_g}g, "
-                f"Fat {combined.fat_g}g"
+                f"Calories {combined.calories} kcal, Protein {combined.protein_g}g, "
+                f"Carbs {combined.carbs_g}g, Fat {combined.fat_g}g"
             )
 
-            prompt = f"""
-            Based on: {meal_summary}
-            Return valid JSON including **all** the following fields:
+            # 2. Versioned cache key for recommendations (coarse granularity by macro quartet)
+            prompt_version = "rec_v2"
+            key_material = json.dumps({
+                "calories": combined.calories,
+                "protein_g": combined.protein_g,
+                "carbs_g": combined.carbs_g,
+                "fat_g": combined.fat_g,
+                "v": prompt_version,
+            }, sort_keys=True, separators=(",", ":"))
+            rec_hash = hashlib.md5(key_material.encode()).hexdigest()
+            cache_key = f"{prompt_version}:{rec_hash}:{self.CHAT_MODEL}"
+            # Initialize recommendation cache lazily
+            if not hasattr(self, "_rec_cache"):
+                self._rec_cache = {}
+            if cache_key in self._rec_cache:
+                return self._rec_cache[cache_key]
 
-            {{
-              "recommendations": ["Tip 1", "Tip 2"],
-              "health_score": int(0-100),
-              "meal_type": "breakfast|lunch|dinner|snack|unknown",
-              "dietary_considerations": ["list"],
-              "meal_rating": int(0-10),
-              "suggestions": ["Quick suggestion 1", "Quick suggestion 2"],
-              "improvements": ["Improvement idea 1", "Improvement idea 2"],
-              "positive_aspects": ["Positive note 1", "Positive note 2"]
-            }}
+            # 3. Rules & JSON contract (concise)
+            contract = (
+                "Required JSON keys: recommendations[list(str)], health_score[int 0-100], meal_type[str one of "
+                "breakfast|lunch|dinner|snack|unknown], dietary_considerations[list(str)], meal_rating[int 0-10], "
+                "suggestions[list(str)], improvements[list(str)], positive_aspects[list(str)]."
+            )
+            rules = (
+                "Rules:\n"
+                "1. Base feedback ONLY on provided macros (no guessing hidden nutrients).\n"
+                "2. health_score: holistic quality (higher = healthier).\n"
+                "3. meal_rating: palatability/overall quality 0–10.\n"
+                "4. Provide actionable, concise, non-repetitive suggestions.\n"
+                "5. No markdown, explanations, or extra keys — JSON ONLY.\n"
+                "6. All arrays must have at least 1 element; if nothing relevant, give a neutral constructive entry.\n"
+            )
+            examples = (
+                "Example health_score guidance: High protein & moderate calories => 70–85; very high sugar & low protein => 30–50.\n"
+            )
 
-            Ensure **meal_rating** is a numeric score (0–10).
-            Always include all keys. Return only JSON.
-            """
+            prompt = (
+                f"Macro summary: {meal_summary}\n" +
+                contract + "\n" + rules + examples +
+                "Return ONLY strict JSON with all required keys." 
+            )
 
-            _t = datetime.utcnow().isoformat()
-            _s = time.perf_counter()
-            logger.info(f"[OpenAI][START] ts={_t} step=recommendations model={self.CHAT_MODEL} temp=0.1 max_tokens=1500")
+            ts = datetime.utcnow().isoformat() + "Z"
+            start = time.perf_counter()
+            logger.info(
+                "[OpenAI][START] ts=%s step=recommendations model=%s temp=%s max_tokens=%s hash=%s summary='%s'",
+                ts, self.CHAT_MODEL, self.JSON_TEMPERATURE, self.JSON_MAX_TOKENS, rec_hash, meal_summary
+            )
 
             resp = await self.client.chat.completions.create(
                 model=self.CHAT_MODEL,
                 messages=[
-                    {"role": "system", "content": sys},
+                    {"role": "system", "content": "You are a concise, evidence-based nutrition coach. Output ONLY JSON."},
                     {"role": "user", "content": prompt},
                 ],
                 response_format={"type": "json_object"},
@@ -311,14 +472,41 @@ Return valid JSON following this schema:
                 max_tokens=self.JSON_MAX_TOKENS,
             )
 
-            dur = int((time.perf_counter() - _s) * 1000)
-            logger.info(f"[OpenAI][END] step=recommendations dur_ms={dur}")
+            duration_ms = int((time.perf_counter() - start) * 1000)
 
-            raw = self._clean_ai_response(resp.choices[0].message.content)
+            if not getattr(resp, "choices", None) or not resp.choices:
+                raise ValueError("Empty response choices from recommendations model")
+            first = resp.choices[0]
+            content = getattr(getattr(first, "message", None), "content", None)
+            if not content:
+                raise ValueError("Empty message content from recommendations model")
+
+            raw = self._clean_ai_response(content)
             parsed = MealRecommendations.model_validate_json(raw)
-            return parsed.model_dump()
+            result = parsed.model_dump()
+
+            # Clamp numeric fields and enforce non-empty arrays
+            result["health_score"] = max(0, min(100, int(result.get("health_score", 0) or 0)))
+            result["meal_rating"] = max(0, min(10, int(result.get("meal_rating", 0) or 0)))
+            for arr_key, fallback in [
+                ("recommendations", "General balanced meal advice."),
+                ("dietary_considerations", "none"),
+                ("suggestions", "Add a source of fiber."),
+                ("improvements", "Increase vegetables."),
+                ("positive_aspects", "Contains protein."),
+            ]:
+                if not isinstance(result.get(arr_key), list) or len(result.get(arr_key)) == 0:
+                    result[arr_key] = [fallback]
+
+            # Cache result
+            self._rec_cache[cache_key] = result
+
+            logger.info(
+                "[OpenAI][END] step=recommendations dur_ms=%d hash=%s recs=%d", duration_ms, rec_hash, len(result.get('recommendations', []))
+            )
+            return result
         except Exception as e:
-            logger.error(f"Error in _get_recommendations: {e}")
+            logger.error("Error in _get_recommendations: %s", e, exc_info=True)
             return {
                 "recommendations": ["Could not generate advice."],
                 "health_score": 5,
@@ -340,34 +528,66 @@ Return valid JSON following this schema:
             return ["No improvements available."]
 
     async def answer_question(self, question: str, meal_data: Dict[str, Any]):
-        """Answer user questions about the analyzed meal with structured streaming response."""
+        """Answer user questions about the analyzed meal with a structured streaming response.
+
+        Enhancements:
+        - Structured system instructions with explicit output contract
+        - Uses delimiters (---SUMMARY--- / ---DETAILS---) for easier client-side parsing
+        - Wraps OpenAI streaming iterator into an async generator yielding text chunks
+        - Logs start/end with duration and char count
+        - Defensive handling for empty/None content events
+        Returns: async generator of str chunks (original external behavior preserved if caller consumes returned stream)
+        """
         try:
             nutrition = meal_data.get("nutrition_summary", {})
-            nutrition_text = ", ".join(
-                f"{k}: {round(v['value'])}{' kcal' if k == 'calories' else 'g'}"
-                for k, v in nutrition.items()
-                if isinstance(v, dict) and "value" in v
-            )
+            meal_name = meal_data.get('meal_info', {}).get('name', 'Unknown')
+
+            def fmt_entry(k: str, v: Dict[str, Any]) -> str:
+                try:
+                    val = v.get('value')
+                    if val is None:
+                        return ''
+                    if k == 'calories':
+                        return f"calories: {round(val)} kcal"
+                    return f"{k}: {round(val)}g"
+                except Exception:
+                    return ''
+
+            nutrition_parts = [fmt_entry(k, v) for k, v in nutrition.items() if isinstance(v, dict)]
+            nutrition_text = ", ".join([p for p in nutrition_parts if p]) or "no macro data"
 
             system_msg = (
-                "You are an expert nutritionist and registered dietitian. "
-                "Respond in two sections:\n\n"
-                "💡 SUMMARY:\n"
-                "- Give a short, direct answer in 1–2 sentences with emojis.\n\n"
-                "📘 DETAILS:\n"
-                "- Explain nutritional relevance.\n"
-                "- Reference daily values and context.\n"
-                "- Give practical, actionable advice."
+                "You are an evidence-based registered dietitian. Provide accurate, concise, user-friendly guidance.\n"
+                "Format strictly with two sections delimited by markers.\n"
+                "OUTPUT CONTRACT:\n"
+                "---SUMMARY---\n"
+                "One or two punchy sentences answering the question. May include tasteful emojis (max 2).\n"
+                "---DETAILS---\n"
+                "Bullet-style or short paragraphs: context, nutrient implications, actionable advice, daily value references.\n"
+                "RULES:\n"
+                "1. No markdown headings besides the required markers.\n"
+                "2. Avoid medical claims; focus on general nutrition guidance.\n"
+                "3. Be encouraging, specific, not alarmist.\n"
+                "4. If data insufficient, state assumptions explicitly.\n"
+                "5. Never fabricate exact micronutrient numbers not provided.\n"
+                "6. Keep DETAILS under ~12 sentences total.\n"
+            )
+
+            user_msg = (
+                f"Meal: {meal_name}. Nutrition summary: {nutrition_text}.\n"
+                f"Question: {question}"
             )
 
             messages = [
                 {"role": "system", "content": system_msg},
-                {"role": "user", "content": f"The meal is {meal_data.get('meal_info', {}).get('name', 'Unknown')}. "
-                                            f"Nutrition: {nutrition_text}. "
-                                            f"Question: {question}"}
+                {"role": "user", "content": user_msg},
             ]
 
-            logger.info(f"[OpenAI][START] ts={datetime.utcnow().isoformat()} step=qa_stream model={self.CHAT_MODEL}")
+            ts = datetime.utcnow().isoformat() + "Z"
+            start = time.perf_counter()
+            logger.info(
+                "[OpenAI][START] ts=%s step=qa_stream model=%s meal=%s question_len=%d", ts, self.CHAT_MODEL, meal_name, len(question)
+            )
 
             stream = await self.client.chat.completions.create(
                 model=self.CHAT_MODEL,
@@ -377,8 +597,32 @@ Return valid JSON following this schema:
                 temperature=0.5,
             )
 
-            return stream
+            async def generator():
+                emitted = 0
+                try:
+                    async for chunk in stream:  # type: ignore
+                        # OpenAI Python async streaming yields events with .choices[0].delta.content sometimes None
+                        try:
+                            choices = getattr(chunk, 'choices', None)
+                            if not choices:
+                                continue
+                            delta = getattr(choices[0], 'delta', None)
+                            if not delta:
+                                continue
+                            content = getattr(delta, 'content', None)
+                            if content:
+                                emitted += len(content)
+                                yield content
+                        except Exception as inner_e:  # continue streaming despite small parse errors
+                            logger.debug("[Stream][WARN] parse_error=%s", inner_e)
+                            continue
+                finally:
+                    dur_ms = int((time.perf_counter() - start) * 1000)
+                    logger.info(
+                        "[OpenAI][END] step=qa_stream dur_ms=%d chars=%d meal=%s", dur_ms, emitted, meal_name
+                    )
 
+            return generator()
         except Exception as e:
-            logger.error(f"Error in answer_question: {e}")
+            logger.error("Error in answer_question: %s", e, exc_info=True)
             raise

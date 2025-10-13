@@ -102,10 +102,14 @@ async def test_nutrition_analysis():
                 assert isinstance(recommendations['health_score'], (int, float)), "Health score should be a number"
                 assert 0 <= recommendations['health_score'] <= 100, "Health score should be between 0 and 100"
                 assert isinstance(recommendations['meal_type'], str), "Meal type should be a string"
-                assert recommendations['meal_type'].lower() in {'breakfast', 'lunch', 'dinner', 'snack'}, "Invalid meal type"
+                assert recommendations['meal_type'].lower() in {'breakfast', 'lunch', 'dinner', 'snack', 'unknown'}, "Invalid meal type"
                 assert isinstance(recommendations['dietary_considerations'], list), "Dietary considerations should be a list"
+                # Non-empty arrays enforced in code; just assert >0
                 assert len(recommendations['recommendations']) > 0, "Should have at least one recommendation"
-                assert len(recommendations['dietary_considerations']) > 0, "Should have at least one dietary consideration"
+                assert len(recommendations['suggestions']) > 0, "Should have at least one suggestion"
+                assert len(recommendations['improvements']) > 0, "Should have at least one improvement"
+                assert len(recommendations['positive_aspects']) > 0, "Should have at least one positive aspect"
+                assert 0 <= recommendations['meal_rating'] <= 10, "Meal rating should be between 0 and 10"
                 
                 logger.info("Recommendation validation passed!")
             else:
