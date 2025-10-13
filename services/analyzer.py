@@ -209,25 +209,35 @@ class FoodAnalyzerService:
             schema_json = json.dumps(schema, separators=(",", ":"))
 
             rules = (
-                "Rules:\n"
-                "1. Identify only visible, distinct food/drink items (no hidden/inferred ingredients).\n"
-                "2. Count identical discrete items precisely (e.g., '3 tacos').\n"
-                "3. Single dish in one plate/bowl => quantity '1 serving'.\n"
-                "4. Multiple identical plates/bowls => 'N servings'.\n"
-                "5. Confidence: 0.00–1.00 (two decimals). If unsure, use generic label + low confidence.\n"
-                "6. No commentary, no markdown, no code fences — JSON ONLY.\n"
-                "7. Do not list composite dish ingredients separately unless plated separately.\n"
-                "8. If unsure of name, use 'unknown <category>' (e.g., 'unknown vegetable').\n"
-            )
+    "Rules:\n"
+    "1. Identify all distinct visible food or drink items separately (do not group as 'salad bowl').\n"
+    "2. Include solid foods, liquids, and condiments if clearly visible.\n"
+    "3. For each item, include an estimated quantity (piece count, half portion, or grams).\n"
+    "4. Always include an approximate weight in grams for visible servings, even if only one piece (e.g., '1 piece ≈120 g').\n"
+    "5. Use real-world serving approximations: e.g., 1 egg, ½ avocado, 50 g rice, 40 g beans.\n"
+    "6. Confidence: 0.00–1.00 (two decimals).\n"
+    "7. Return only a JSON list named 'items' — no text, no markdown, no comments.\n"
+    "8. For uncertain quantities, provide a low confidence and approximate descriptor (e.g., 'about 40 g').\n"
+    "9. Label unknowns as 'unknown <category>' if the class cannot be identified.\n"
+    "10. Do not infer hidden ingredients (e.g., filling) unless clearly visible.\n"
+    "11. If a food visually matches a well-known regional or common dish (e.g., baklava, pizza, knafeh) "
+    "with ≥ 0.7 confidence, name the dish directly instead of generic terms, but include the confidence score.\n"
+)
+
 
             examples = (
                 "Examples:\n"
-                "A: One plate spaghetti -> quantity '1 serving'.\n"
-                "B: Three identical pancakes -> '3 pancakes'.\n"
-                "C: Two bowls same soup -> '2 servings'.\n"
-                "Bad (DO NOT): Extra text, markdown fences, inferred hidden ingredients.\n"
+                "A: One bowl containing chicken, rice, avocado, egg, and beans ->\n"
+                "{'items':[{'name':'grilled chicken breast','quantity':'80 g','confidence':0.95},"
+                "{'name':'brown rice','quantity':'50 g','confidence':0.90},"
+                "{'name':'black beans','quantity':'40 g','confidence':0.92},"
+                "{'name':'boiled egg','quantity':'1 piece','confidence':0.98},"
+                "{'name':'avocado','quantity':'0.5 piece','confidence':0.95},"
+                "{'name':'mixed greens','quantity':'60 g','confidence':0.90},"
+                "{'name':'vinaigrette dressing','quantity':'20 g','confidence':0.85}]}\n"
+                "B: Water glass with lemon slice -> {'items':[{'name':'lemon water','quantity':'1 glass','confidence':0.95}]}\n"
+                "C: Red apple -> {'items':[{'name':'apple','quantity':'1 piece','confidence':0.98}]}\n"
             )
-
             prompt = (
                 "Analyze this meal image. Provide structured JSON only.\n\n" +
                 rules + "\n" + examples +
@@ -285,19 +295,8 @@ class FoodAnalyzerService:
             return DishAnalysis(items=[VisionFoodItem(name="Unidentified Food", type="main_dish", quantity="1 serving", confidence=0.0)])
 
     async def _analyze_nutrition(self, items: List[FoodItem]) -> NutritionAnalysis:
-        """Analyze nutrition for a list of food items via LLM JSON response.
-
-        Enhancements (method-local only):
-        - Versioned cache key (separates prompt/schema evolution)
-        - Compact minified schema & payload to reduce tokens
-        - Explicit rule-based prompt with examples & prohibitions
-        - Defensive response validation for empty choices/content
-        - Structured logging (hash, item count, duration)
-        - UTC timestamp suffix 'Z'
-        Returns NutritionAnalysis or None on failure (unchanged externally).
-        """
         try:
-            # 1. Build normalized payload (stable ordering for cache key)
+            # 1. Build normalized payload
             payload = [
                 {
                     "name": i.name,
@@ -307,38 +306,48 @@ class FoodAnalyzerService:
                 for i in items
             ]
 
-            # 2. Versioned cache key (update version when prompt/schema materially changes)
-            prompt_version = "nutri_v2"
+            # 2. Versioned cache key
+            prompt_version = "nutri_v3"  # bumped version after schema enforcement change
             key_material = json.dumps(payload, sort_keys=True, separators=(",", ":"))
             key_hash = hashlib.md5(key_material.encode()).hexdigest()
             cache_key = f"{prompt_version}:{key_hash}:{self.CHAT_MODEL}"
             if cache_key in self._nutrition_cache:
                 return self._nutrition_cache[cache_key]
 
-            # 3. Minified schema
-            schema = NutritionAnalysisResponse.model_json_schema()
-            schema_json = json.dumps(schema, separators=(",", ":"))
+            # 3. Get minified schema
+            schema_dict = NutritionAnalysisResponse.model_json_schema()
+            schema_json = json.dumps(schema_dict, separators=(",", ":"))
 
-            # 4. Rules & examples (concise)
+            # 4. Rules & examples (updated to match schema field names)
             rules = (
                 "Rules:\n"
-                "1. Use provided item names; do not invent new items.\n"
-                "2. Estimate realistic serving-based nutrition macros & calories.\n"
-                "3. Keep numeric units consistent (grams for macros, calories for energy).\n"
-                "4. If uncertain, provide best estimate; never leave required fields blank.\n"
-                "5. Do NOT add commentary, markdown, or extra keys. JSON ONLY.\n"
-                "6. All required schema fields must be present.\n"
-            )
-            examples = (
-                "Example item input -> output note: '2 tacos' should reflect combined nutrition for both tacos.\n"
-                "If quantity has explicit count (e.g., '3 pancakes'), scale nutrition accordingly.\n"
+                "1. Use only the provided item names, types, and quantities; do not invent or merge items.\n"
+                "2. For each item, estimate total nutrition for the visible serving size or stated weight.\n"
+                "3. Provide all required fields: Calories, Serving_Size, Protein, Carbs, Fiber, Sugar, Fat, Sat_Fat, Category.\n"
+                "4. Include optional Diet_Tags and Warnings when applicable.\n"
+                "5. Keep units consistent: grams for macros, kcal for energy.\n"
+                "6. Round numbers to one decimal where relevant.\n"
+                "7. If quantity is ambiguous, assume typical real-world weights (e.g., 1 egg ≈50 g).\n"
+                "8. When multiple pieces are listed, scale totals accordingly.\n"
+                "9. Return ONLY JSON matching the NutritionAnalysisResponse schema.\n"
+                "10. Do not include commentary, markdown, or extra keys.\n"
             )
 
-            # 5. Prompt assembly (payload inline, minified)
+            examples = (
+                "Examples:\n"
+                "Input: [{'name':'Knafeh','type':'main_dish','quantity':'1 piece ≈120 g'}]\n"
+                "Output:\n"
+                "{'combined':{'Calories':420,'Serving_Size':'1 piece ≈120 g','Protein':10.0,'Carbs':45.0,'Fiber':1.2,'Sugar':30.0,'Fat':20.0,'Sat_Fat':10.0,'Category':'dessert','Diet_Tags':['vegetarian'],'Warnings':['high sugar','high fat']},"
+                "'items':[{'name':'Knafeh','type':'main_dish','Calories':420,'Serving_Size':'1 piece ≈120 g','Protein':10.0,'Carbs':45.0,'Fiber':1.2,'Sugar':30.0,'Fat':20.0,'Sat_Fat':10.0,'Category':'dessert','Diet_Tags':['vegetarian'],'Warnings':['high sugar','high fat'],'quantity':'1 piece'}]}"
+            )
+
+            # 5. Prompt assembly
             prompt = (
-                "Analyze these meal components and return ONLY valid JSON matching the schema.\n" +
-                rules + examples +
-                "Schema:" + schema_json + "\nItems:" + key_material
+                "Analyze these meal components and return ONLY valid JSON matching the NutritionAnalysisResponse schema.\n"
+                + rules
+                + examples
+                + "\nItems:\n"
+                + key_material
             )
 
             ts = datetime.utcnow().isoformat() + "Z"
@@ -348,24 +357,38 @@ class FoodAnalyzerService:
                 ts, self.CHAT_MODEL, self.JSON_TEMPERATURE, self.JSON_MAX_TOKENS, len(payload), cache_key
             )
 
+            # 6. OpenAI call with enforced JSON schema validation
             resp = await self.client.chat.completions.create(
                 model=self.CHAT_MODEL,
                 messages=[
-                    {"role": "system", "content": "You are a meticulous nutrition scientist. Return ONLY JSON conforming to the schema."},
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a meticulous nutrition scientist. "
+                            "Return ONLY valid JSON strictly conforming to the provided schema. "
+                            "No markdown, no comments."
+                        ),
+                    },
                     {"role": "user", "content": prompt},
                 ],
-                response_format={"type": "json_object"},
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+            "name": "NutritionAnalysisResponse",
+            "schema": schema_dict
+        },  # enforce your NutritionAnalysisResponse structure
+                },
                 temperature=self.JSON_TEMPERATURE,
                 max_tokens=self.JSON_MAX_TOKENS,
             )
 
             duration_ms = int((time.perf_counter() - start) * 1000)
 
-            # Defensive checks
+            # 7. Defensive checks and parsing
             if not getattr(resp, "choices", None) or not resp.choices:
                 raise ValueError("Empty response choices from nutrition model")
-            first = resp.choices[0]
-            content = getattr(getattr(first, "message", None), "content", None)
+
+            content = getattr(resp.choices[0].message, "content", None)
             if not content:
                 raise ValueError("Empty message content from nutrition model")
 
@@ -375,12 +398,15 @@ class FoodAnalyzerService:
             self._nutrition_cache[cache_key] = result
 
             logger.info(
-                "[OpenAI][END] step=nutrition dur_ms=%d hash=%s items=%d", duration_ms, cache_key, len(result.items if hasattr(result, 'items') else [])
+                "[OpenAI][END] step=nutrition dur_ms=%d hash=%s items=%d",
+                duration_ms, cache_key, len(result.items if hasattr(result, "items") else []),
             )
             return result
+
         except Exception as e:
             logger.error("Error in _analyze_nutrition: %s", e, exc_info=True)
             return None
+
     async def _get_recommendations(self, nutrition: Optional[Any]) -> Dict[str, Any]:
         """Generate meal recommendations and qualitative feedback.
 

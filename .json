@@ -1,0 +1,254 @@
+{
+    "$defs": {
+        "NutritionAPIResponse": {
+            "description": "Model for nutrition information from API with flexible typing.",
+            "properties": {
+                "Calories": {
+                    "anyOf": [
+                        { "type": "integer" },
+                        { "type": "string" }
+                    ],
+                    "description": "Calories in kcal",
+                    "title": "Calories"
+                },
+                "Serving_Size": {
+                    "description": "Serving size in common measurements",
+                    "title": "Serving Size",
+                    "type": "string"
+                },
+                "Protein": {
+                    "anyOf": [
+                        { "type": "number" },
+                        { "type": "string" }
+                    ],
+                    "description": "Protein content in grams",
+                    "title": "Protein"
+                },
+                "Carbs": {
+                    "anyOf": [
+                        { "type": "number" },
+                        { "type": "string" }
+                    ],
+                    "description": "Carbohydrate content in grams",
+                    "title": "Carbs"
+                },
+                "Fiber": {
+                    "anyOf": [
+                        { "type": "number" },
+                        { "type": "string" }
+                    ],
+                    "description": "Fiber content in grams",
+                    "title": "Fiber"
+                },
+                "Sugar": {
+                    "anyOf": [
+                        { "type": "number" },
+                        { "type": "string" }
+                    ],
+                    "description": "Sugar content in grams",
+                    "title": "Sugar"
+                },
+                "Fat": {
+                    "anyOf": [
+                        { "type": "number" },
+                        { "type": "string" }
+                    ],
+                    "description": "Total fat content in grams",
+                    "title": "Fat"
+                },
+                "Sat_Fat": {
+                    "anyOf": [
+                        { "type": "number" },
+                        { "type": "string" }
+                    ],
+                    "description": "Saturated fat content in grams",
+                    "title": "Sat Fat"
+                },
+                "Category": {
+                    "description": "Food category",
+                    "minLength": 1,
+                    "title": "Category",
+                    "type": "string"
+                },
+                "Diet_Tags": {
+                    "anyOf": [
+                        {
+                            "items": { "type": "string" },
+                            "type": "array"
+                        },
+                        { "type": "string" }
+                    ],
+                    "description": "Dietary tags",
+                    "title": "Diet Tags"
+                },
+                "Warnings": {
+                    "anyOf": [
+                        {
+                            "items": { "type": "string" },
+                            "type": "array"
+                        },
+                        { "type": "string" }
+                    ],
+                    "description": "Nutritional warnings",
+                    "title": "Warnings"
+                }
+            },
+            "required": [
+                "Calories",
+                "Serving_Size",
+                "Protein",
+                "Carbs",
+                "Fiber",
+                "Sugar",
+                "Fat",
+                "Sat_Fat",
+                "Category"
+            ],
+            "title": "NutritionAPIResponse",
+            "type": "object"
+        },
+        "NutritionResponseItem": {
+            "description": "Model for individual food item nutrition in API responses.",
+            "properties": {
+                "name": {
+                    "description": "Name of the food item",
+                    "minLength": 1,
+                    "title": "Name",
+                    "type": "string"
+                },
+                "type": {
+                    "description": "Type of food item",
+                    "enum": ["main_dish", "side_dish", "beverage", "condiment"],
+                    "title": "Type",
+                    "type": "string"
+                },
+                "Calories": {
+                    "anyOf": [
+                        { "type": "integer" },
+                        { "type": "string" }
+                    ],
+                    "description": "Calories in kcal",
+                    "title": "Calories"
+                },
+                "Serving_Size": {
+                    "description": "Serving size in common measurements",
+                    "title": "Serving Size",
+                    "type": "string"
+                },
+                "Protein": {
+                    "anyOf": [
+                        { "type": "number" },
+                        { "type": "string" }
+                    ],
+                    "description": "Protein content in grams",
+                    "title": "Protein"
+                },
+                "Carbs": {
+                    "anyOf": [
+                        { "type": "number" },
+                        { "type": "string" }
+                    ],
+                    "description": "Carbohydrate content in grams",
+                    "title": "Carbs"
+                },
+                "Fiber": {
+                    "anyOf": [
+                        { "type": "number" },
+                        { "type": "string" }
+                    ],
+                    "description": "Fiber content in grams",
+                    "title": "Fiber"
+                },
+                "Sugar": {
+                    "anyOf": [
+                        { "type": "number" },
+                        { "type": "string" }
+                    ],
+                    "description": "Sugar content in grams",
+                    "title": "Sugar"
+                },
+                "Fat": {
+                    "anyOf": [
+                        { "type": "number" },
+                        { "type": "string" }
+                    ],
+                    "description": "Total fat content in grams",
+                    "title": "Fat"
+                },
+                "Sat_Fat": {
+                    "anyOf": [
+                        { "type": "number" },
+                        { "type": "string" }
+                    ],
+                    "description": "Saturated fat content in grams",
+                    "title": "Sat Fat"
+                },
+                "Category": {
+                    "description": "Food category",
+                    "minLength": 1,
+                    "title": "Category",
+                    "type": "string"
+                },
+                "Diet_Tags": {
+                    "anyOf": [
+                        {
+                            "items": { "type": "string" },
+                            "type": "array"
+                        },
+                        { "type": "string" }
+                    ],
+                    "description": "Dietary tags",
+                    "title": "Diet Tags"
+                },
+                "Warnings": {
+                    "anyOf": [
+                        {
+                            "items": { "type": "string" },
+                            "type": "array"
+                        },
+                        { "type": "string" }
+                    ],
+                    "description": "Nutritional warnings",
+                    "title": "Warnings"
+                },
+                "quantity": {
+                    "default": "1 serving",
+                    "description": "Estimated portion or container size",
+                    "title": "Quantity",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "name",
+                "type",
+                "Calories",
+                "Serving_Size",
+                "Protein",
+                "Carbs",
+                "Fiber",
+                "Sugar",
+                "Fat",
+                "Sat_Fat",
+                "Category"
+            ],
+            "title": "NutritionResponseItem",
+            "type": "object"
+        }
+    },
+    "description": "Model for the complete nutrition analysis API response.",
+    "properties": {
+        "combined": {
+            "$ref": "#/$defs/NutritionAPIResponse",
+            "description": "Combined nutritional information"
+        },
+        "items": {
+            "description": "Individual item nutritional information",
+            "items": { "$ref": "#/$defs/NutritionResponseItem" },
+            "title": "Items",
+            "type": "array"
+        }
+    },
+    "required": ["combined", "items"],
+    "title": "NutritionAnalysisResponse",
+    "type": "object"
+}

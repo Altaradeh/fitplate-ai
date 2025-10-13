@@ -3,13 +3,12 @@ import json
 import logging
 import os
 import re
-import sys
-import argparse
 from typing import Optional, Tuple, List, Dict, Any
 
 import nest_asyncio
 import streamlit as st
 from dotenv import load_dotenv
+from openai import AsyncOpenAI, OpenAIError
 from PIL import Image
 
 from services.analyzer import FoodAnalyzerService
@@ -17,66 +16,19 @@ from services.analyzer import FoodAnalyzerService
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
-load_dotenv()
-
-# Optional demo mode using a local JSON file (no API calls)
-def _parse_args():
-    try:
-        parser = argparse.ArgumentParser(add_help=False)
-        parser.add_argument("--data-json", dest="data_json", default=None)
-        args, _ = parser.parse_known_args(sys.argv[1:])
-        return args
-    except Exception:
-        class _A: data_json=None
-        return _A()
-
-_args = _parse_args()
-DEMO_JSON_PATH = os.getenv("UX_DATA_JSON") or (_args.data_json if hasattr(_args, "data_json") else None)
-DEMO_MODE = bool(DEMO_JSON_PATH)
-DEMO_DATA: Optional[Dict[str, Any]] = None
-if DEMO_MODE:
-    try:
-        with open(DEMO_JSON_PATH, "r", encoding="utf-8") as f:
-            DEMO_DATA = json.load(f)
-    except Exception as e:
-        DEMO_DATA = None
-        DEMO_MODE = False
-        logging.getLogger(__name__).error(f"Failed to load demo JSON: {e}")
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 nest_asyncio.apply()
 
 load_dotenv()
-api_key = os.getenv("OPENAI_API_KEY") or os.getenv("openai_key")
-
-# Only set up OpenAI client/analyzer when not in demo mode
-client = None
-OpenAIError = Exception  # fallback type
-analyzer = None
-if not DEMO_MODE:
-    try:
-        from openai import AsyncOpenAI, OpenAIError as _OpenAIError  # type: ignore
-        OpenAIError = _OpenAIError
-        if not api_key:
-            raise ValueError("No OpenAI API key found. Please set OPENAI_API_KEY in your .env file")
-        client = AsyncOpenAI(api_key=api_key)
-        analyzer = FoodAnalyzerService(api_key=api_key)
-    except Exception as e:
-        # If anything fails, remain without client and handle later
-        logging.getLogger(__name__).error(f"OpenAI setup failed: {e}")
+CLIENT_AVAILABLE = False
+client: Optional[AsyncOpenAI] = None
 
 from app.config import VISION_MODEL, CHAT_MODEL
 
-async def verify_openai_access() -> Tuple[bool, Optional[str]]:
-    if DEMO_MODE:
-        # In demo mode we explicitly avoid any network calls
-        logger.info("Demo mode enabled: skipping OpenAI verification")
-        return True, None
+async def verify_openai_access(client: AsyncOpenAI) -> Tuple[bool, Optional[str]]:
     try:
-        if client is None:
-            return False, "OpenAI client not initialized"
         response = await client.chat.completions.create(
             model=CHAT_MODEL,
             messages=[{"role": "user", "content": "Hi"}],
@@ -95,16 +47,8 @@ async def verify_openai_access() -> Tuple[bool, Optional[str]]:
     
     return False, "No response received from OpenAI API"
 
-async def process_image(image):
+async def process_image(image, analyzer: FoodAnalyzerService):
     try:
-        if DEMO_MODE and DEMO_DATA:
-            meal = DEMO_DATA.get("meal_info", {})
-            dish_name = meal.get("name", "Unknown Dish")
-            confidence = meal.get("confidence", 0.0)
-            return {"dish_name": dish_name, "confidence": confidence}, DEMO_DATA
-
-        if analyzer is None:
-            raise RuntimeError("Analyzer not available")
         analysis_result = await analyzer.analyze_meal(image)
         if not analysis_result or analysis_result.get("status") == "error":
             error_msg = analysis_result.get("error", "Unknown error") if analysis_result else "No result"
@@ -138,18 +82,7 @@ async def handle_chat(analyzer: FoodAnalyzerService, question: str, analysis_res
         _ts = datetime.utcnow().isoformat()
         _start = time.perf_counter()
         logger.info(f"[Chat][START] ts={_ts} question_len={len(question)}")
-        if DEMO_MODE:
-            async def _demo_stream():
-                msg = (
-                    "✅ SUMMARY: Looks balanced with solid protein.\n\n"
-                    "📘 DETAILS: Consider more veggies and keep sauces light."
-                )
-                for i in range(0, len(msg), 24):
-                    yield msg[i:i+24]
-                    await asyncio.sleep(0.02)
-            stream = _demo_stream()
-        else:
-            stream = await analyzer.answer_question(question, analysis_result)
+        stream = await analyzer.answer_question(question, analysis_result)
         token_count = 0
         async for chunk in stream:
             token_count += 1
@@ -223,10 +156,9 @@ def render_meal_analysis(analysis_data):
         st.markdown("### 🤖 AI Insights")
         score_color = "green" if insights["health_score"] >= 80 else "orange" if insights["health_score"] >= 60 else "red"
         st.markdown(f"**Health Score:** <span style='color: {score_color}'>{insights['health_score']}/100</span>", unsafe_allow_html=True)
-        with st.spinner("Getting personalized suggestions..."):
-            suggestions = loop.run_until_complete(analyzer.suggest_improvements(analysis_data))
-            for suggestion in suggestions:
-                st.markdown(suggestion)
+        suggestions = analysis_data.get("suggestions") or insights.get("suggestions", [])
+        for suggestion in suggestions:
+            st.markdown(suggestion)
         if insights["dietary_considerations"]:
             with st.expander("📋 Dietary Considerations"):
                 for consideration in insights["dietary_considerations"]:
@@ -325,6 +257,39 @@ def preferences_sidebar():
             unsafe_allow_html=True,
         )
 
+def _load_demo_from_json(path: str) -> Tuple[Dict[str, Any], Dict[str, Any], List[str]]:
+    try:
+        with open(path, 'r') as f:
+            data = json.load(f)
+        dish = data.get('dish') or {"dish_name": "Sample Meal", "confidence": 0.85}
+        nutrition = data.get('nutrition') or {}
+        suggestions = data.get('suggestions') or []
+        return dish, nutrition, suggestions
+    except Exception as e:
+        logger.error(f"Failed to load demo JSON from {path}: {e}")
+        # Fallback minimal shape to keep UI working
+        fallback = {
+            "meal_info": {"serving_size": "1 serving"},
+            "nutrition_summary": {
+                "calories": {"value": 400, "daily_value": 20},
+                "macros": {
+                    "protein": {"value": 25, "daily_value": 50},
+                    "carbs": {"value": 45, "daily_value": 15},
+                    "fat": {"value": 12, "daily_value": 15}
+                },
+                "additional": {
+                    "fiber": {"value": 6, "daily_value": 24},
+                    "sugar": {"value": 12, "daily_value": 0},
+                    "saturated_fat": {"value": 3, "daily_value": 15}
+                },
+                "warnings": ["Sodium may be high"],
+                "diet_tags": ["balanced"]
+            },
+            "components": []
+        }
+        return {"dish_name": "Demo Meal", "confidence": 0.9}, fallback, ["Add a side of veggies for fiber."]
+
+
 def main():
     st.set_page_config(page_title="🍽️ Smart Dish Analyzer", page_icon="🍽️", layout="centered")
     load_styles()
@@ -333,14 +298,35 @@ def main():
     st.markdown('<div class="topbar"><div class="title">🍽️ FitPlate AI</div><div class="theme-toggle">', unsafe_allow_html=True)
     theme_toggle()
     st.markdown('</div></div>', unsafe_allow_html=True)
-    loop = asyncio.get_event_loop()
-    access_ok, error_msg = loop.run_until_complete(verify_openai_access())
-    if not access_ok:
-        st.error(f"⚠️ OpenAI API Error: {error_msg}")
-        st.info("Please check your OpenAI API key in the .env file and ensure you have access to GPT-4 Vision API.")
-        return
-    if DEMO_MODE:
-        st.info(f"Using local demo data: {DEMO_JSON_PATH}")
+    # Demo mode toggle and JSON path
+    demo_default = bool(os.getenv('UX_DEMO') or os.getenv('UX_DATA_JSON'))
+    with st.sidebar:
+        st.markdown("### 🧪 Demo Mode")
+        demo_mode = st.toggle("Run without API (JSON)", value=demo_default)
+        json_path = st.text_input("Demo JSON path", value=os.getenv('UX_DATA_JSON', 'data/demo_meal.json')) if demo_mode else None
+
+    # Initialize OpenAI client and analyzer only if not in demo mode
+    analyzer: Optional[FoodAnalyzerService] = None
+    if not demo_mode:
+        loop = asyncio.get_event_loop()
+        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("openai_key")
+        if not api_key:
+            st.error("No OpenAI API key found. Enable Demo Mode or set OPENAI_API_KEY in your .env file.")
+            return
+        try:
+            global client, CLIENT_AVAILABLE
+            client = AsyncOpenAI(api_key=api_key)
+            CLIENT_AVAILABLE = True
+        except Exception as e:
+            st.error(f"Failed to initialize OpenAI client: {e}")
+            return
+
+        access_ok, error_msg = loop.run_until_complete(verify_openai_access(client))
+        if not access_ok:
+            st.error(f"⚠️ OpenAI API Error: {error_msg}")
+            st.info("Turn on Demo Mode in the sidebar to run without API access.")
+            return
+        analyzer = FoodAnalyzerService(api_key=api_key)
     st.write("Upload a meal photo or use your camera to analyze your food and chat about your goals.")
     tab_upload, tab_camera = st.tabs(["📂 Upload Photo", "📷 Take Photo"]) 
     image = None
@@ -353,11 +339,6 @@ def main():
         if camera_input:
             image = Image.open(camera_input)
     if image:
-        with st.container():
-            st.markdown('<div class="card image-preview">', unsafe_allow_html=True)
-            st.image(image, caption="Your Dish", width='stretch')
-            st.markdown('</div>', unsafe_allow_html=True)
-        
         # Use session state to cache analysis results and avoid re-analyzing on chat interactions
         # Create a unique key for this image
         import hashlib
@@ -379,9 +360,8 @@ def main():
                 suggestions = cached_data['suggestions']
             else:
                 # Old cache format - fetch suggestions now
-                if DEMO_MODE and nutrition and nutrition.get('ai_insights'):
-                    insights = nutrition.get('ai_insights', {})
-                    suggestions = insights.get('improvements') or insights.get('suggestions') or []
+                if demo_mode:
+                    suggestions = []
                 else:
                     with st.spinner("Getting personalized suggestions..."):
                         suggestions = loop.run_until_complete(analyzer.suggest_improvements(nutrition))
@@ -394,15 +374,18 @@ def main():
                 st.markdown('<div class="progress-line"><div class="bar"></div></div>', unsafe_allow_html=True)
                 st.markdown('<div class="ai-analyzing mt-2"><i class="fa-solid fa-wand-magic-sparkles"></i> Analyzing <span class="ai-dots"><span></span><span></span><span></span></span></div>', unsafe_allow_html=True)
                 st.markdown('<div class="card"><div class="skel-grid"><div class="skel-line shimmer" style="height:24px"></div><div class="skel-line shimmer" style="height:24px"></div><div class="skel-line shimmer" style="height:24px"></div></div></div>', unsafe_allow_html=True)
-            with st.spinner("Analyzing your dish..."):
-                loop = asyncio.get_event_loop()
-                dish, nutrition = loop.run_until_complete(process_image(image))
+            if demo_mode:
+                with st.spinner("Loading demo analysis..."):
+                    dish, nutrition, suggestions = _load_demo_from_json(json_path)
+            else:
+                with st.spinner("Analyzing your dish..."):
+                    loop = asyncio.get_event_loop()
+                    dish, nutrition = loop.run_until_complete(process_image(image, analyzer))
             loading_placeholder.empty()
             
-            # Get AI suggestions: in demo mode use local data; otherwise call service
-            if DEMO_MODE and nutrition and nutrition.get('ai_insights'):
-                insights = nutrition.get('ai_insights', {})
-                suggestions = insights.get('improvements') or insights.get('suggestions') or []
+            # Get AI suggestions (API) or use demo suggestions
+            if demo_mode:
+                suggestions = suggestions if 'suggestions' in locals() else []
             else:
                 with st.spinner("Getting personalized suggestions..."):
                     suggestions = loop.run_until_complete(analyzer.suggest_improvements(nutrition))
@@ -419,90 +402,204 @@ def main():
             st.error("⚠️ Could not analyze nutrition information")
             return
         
+        # Prepare common values for the left info column
         nutrition_summary = nutrition["nutrition_summary"]
         meal_info = nutrition.get("meal_info", {})
-        # If running with demo JSON, ensure dish variable matches demo
-        if DEMO_MODE and nutrition.get("meal_info"):
-            dish = {
-                "dish_name": nutrition["meal_info"].get("name", dish.get("dish_name", "Unknown Dish")),
-                "confidence": nutrition["meal_info"].get("confidence", dish.get("confidence", 0.0)),
-            }
+        confidence = dish['confidence'] * 100
+        confidence_emoji = "🎯" if confidence >= 90 else "✨" if confidence >= 70 else "👀"
+        diet_tags = nutrition_summary.get("diet_tags", [])
+
+        # Show left column (meal info) and right column (image)
         with st.container():
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            confidence = dish['confidence'] * 100
-            confidence_emoji = "🎯" if confidence >= 90 else "✨" if confidence >= 70 else "👀"
-            st.markdown(f"<div class='section-header'>{confidence_emoji} {dish['dish_name']} <span class='chip'>{confidence:.1f}%</span></div>", unsafe_allow_html=True)
-            cal_col, tags_col = st.columns([1, 2])
-            with cal_col:
+            st.markdown('<div class="card image-preview">', unsafe_allow_html=True)
+            # Move the information to the left, image on the right
+            col_info, col_img = st.columns([2, 3])
+            with col_info:
+                # Minimal inline style for modern chips
+                st.markdown(
+                    """
+                    <style>
+                      .chips{display:flex;flex-wrap:wrap;gap:.5rem;margin:.25rem 0 1rem;}
+                      .chip{display:inline-flex;align-items:center;padding:.35rem .6rem;border-radius:999px;font-size:0.85rem;border:1px solid rgba(0,0,0,.08);}
+                      .chip-warn{background:rgba(255, 59, 48, .08); border-color: rgba(255,59,48,.25);} /* red */
+                      .chip-sugg{background:rgba(52, 199, 89, .08); border-color: rgba(52,199,89,.25);} /* green */
+                      .chip .ico{margin-right:.4rem}
+                      .section-title{font-weight:600;margin:0 0 .5rem 0;display:flex;align-items:center;gap:.5rem;}
+                      .meal-title-row{display:flex;align-items:center;justify-content:space-between;gap:.75rem}
+                      .meal-title{font-size:1.2rem;font-weight:800;display:flex;align-items:center;gap:.5rem}
+                      .meal-badge{border-radius:999px;padding:.25rem .6rem;background:rgba(99,102,241,.12);border:1px solid rgba(99,102,241,.25);font-weight:700}
+                      .meal-meta{display:flex;gap:1rem;color:rgba(0,0,0,.7);font-size:.92rem;margin-top:.35rem}
+                      .diet-chips{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.5rem}
+                      .diet-chip{background:rgba(0,0,0,.06);border:1px solid rgba(0,0,0,.08);border-radius:999px;padding:.25rem .55rem;font-size:.8rem}
+                                            /* Professional spacing and stat card */
+                                            .section-space{margin-top:1rem}
+                                            .section-space-lg{margin-top:1.25rem}
+                                            .stat-card{margin-top:1rem;padding:1rem;border-radius:14px;background:linear-gradient(180deg, rgba(99,102,241,.10), rgba(99,102,241,.04));border:1px solid rgba(99,102,241,.25);box-shadow:0 2px 12px rgba(0,0,0,.06)}
+                                            .stat-label{font-size:.8rem;color:rgba(0,0,0,.6);letter-spacing:.02em}
+                                            .stat-value{font-size:2rem;font-weight:900;display:flex;align-items:baseline;gap:.35rem;margin:.35rem 0}
+                                            .stat-value span{font-size:1rem;color:rgba(0,0,0,.65);font-weight:600}
+                                            .stat-meter{height:8px;background:rgba(0,0,0,.08);border-radius:8px;overflow:hidden;margin-top:.25rem}
+                                            .stat-meter .fill{height:100%;background:linear-gradient(90deg, #6366F1, #22D3EE);}
+                                            .stat-sub{font-size:.85rem;color:rgba(0,0,0,.65);margin-top:.45rem}
+                                            /* Card container for stacked sections */
+                                            .ui-card{background:rgba(255,255,255,.85);backdrop-filter:saturate(180%) blur(6px);border:1px solid rgba(0,0,0,.08);border-radius:16px;padding:1rem;box-shadow:0 6px 20px rgba(0,0,0,.06);margin-bottom:1rem}
+                                            .ui-card-title{font-weight:750;display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem;font-size:1rem}
+                    </style>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                # Meal header + calories (as a card)
+                cal_val = nutrition_summary["calories"]["value"]
                 cal_dv = nutrition_summary["calories"]["daily_value"]
-                st.metric("Total Calories", f"{nutrition_summary['calories']['value']} kcal", f"{cal_dv}% Daily Value", help="Based on 2000 kcal daily requirement", delta_color="off")
                 serving_size = meal_info.get("serving_size", "N/A")
-                st.caption(f"📏 Serving: {serving_size}")
-            with tags_col:
-                diet_tags = nutrition_summary.get("diet_tags", [])
+                title_html = f"<div class='meal-title-row'><div class='meal-title'>{confidence_emoji} {dish['dish_name']}</div><span class='meal-badge'>{confidence:.1f}%</span></div>"
+                meta_html = f"<div class='meal-meta'>🔥 {cal_val} kcal • {cal_dv}% DV · 📏 Serving: {serving_size}</div>"
+                tags_html = ""
                 if diet_tags:
-                    tags_html = " ".join([f"<span class=\"diet-tag\">🏷️ {tag}</span>" for tag in diet_tags])
-                    st.markdown(f"<div class='mt-2'>{tags_html}</div>", unsafe_allow_html=True)
+                    tags_html = "<div class='diet-chips'>" + " ".join([f"<span class='diet-chip'>🏷️ {tag}</span>" for tag in diet_tags]) + "</div>"
+                meal_card_html = f"""
+                    <div class='ui-card'>
+                        {title_html}
+                        {meta_html}
+                        {tags_html}
+                        <div class='stat-card'>
+                          <div class='stat-label'>Total Calories</div>
+                          <div class='stat-value'>{cal_val} <span>kcal</span></div>
+                          <div class='stat-meter'><div class='fill' style='width:{cal_dv}%' /></div>
+                          <div class='stat-sub'>{cal_dv}% Daily Value • Serving: {serving_size}</div>
+                        </div>
+                    </div>
+                """
+                st.markdown(meal_card_html, unsafe_allow_html=True)
+
+                # Icon helpers based on common nutrition keywords
+                def _warn_icon(txt: str) -> str:
+                    t = txt.lower()
+                    if "sodium" in t or "salt" in t: return "🧂"
+                    if "sugar" in t: return "🍬"
+                    if "fat" in t and "saturated" in t: return "🧈"
+                    if "fat" in t: return "🥓"
+                    if "calorie" in t: return "🔥"
+                    if "fiber" in t: return "🌾"
+                    if "protein" in t: return "🥩"
+                    if "carb" in t: return "🍞"
+                    return "⚠️"
+
+                def _sugg_icon(txt: str) -> str:
+                    t = txt.lower()
+                    if "vegetable" in t or "veggie" in t or "broccoli" in t or "salad" in t: return "🥦"
+                    if "fruit" in t: return "🍎"
+                    if "protein" in t or "chicken" in t: return "🥩"
+                    if "fiber" in t or "whole" in t or "quinoa" in t: return "🌾"
+                    if "fat" in t and ("olive" in t or "avocado" in t): return "🫒"
+                    if "sugar" in t: return "🍬"
+                    if "water" in t or "hydrate" in t: return "💧"
+                    if "calorie" in t or "reduce" in t: return "⚡"
+                    return "💡"
+
+                # Show AI Suggestions and Warnings below the Dish info
+                if suggestions:
+                    sugg_chips = [
+                        f"<span class='chip chip-sugg'><span class='ico'>{_sugg_icon(s)}</span>{s}</span>"
+                        for s in suggestions
+                    ]
+                    st.markdown(
+                        f"<div class='ui-card'><div class='ui-card-title'>💡 AI Suggestions</div><div class='chips'>{''.join(sugg_chips)}</div></div>",
+                        unsafe_allow_html=True,
+                    )
+
+                warn_list = nutrition_summary.get("warnings", [])
+                if warn_list:
+                    warn_chips = [
+                        f"<span class='chip chip-warn'><span class='ico'>{_warn_icon(w)}</span>{w}</span>"
+                        for w in warn_list
+                    ]
+                    st.markdown(
+                        f"<div class='ui-card'><div class='ui-card-title'>⚠️ Warnings</div><div class='chips'>{''.join(warn_chips)}</div></div>",
+                        unsafe_allow_html=True,
+                    )
+
+            with col_img:
+                # Constrain image height for above-the-fold layout
+                st.markdown(
+                    """
+                    <style>
+                      .image-preview img{max-height:320px;object-fit:cover;border-radius:12px}
+                    </style>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                st.image(image, caption="Your Dish", use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
+
+        # Row: Left = Additional Nutrients, Right = Macronutrients (aligned with image width and equal height)
         with st.container():
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.markdown('<div class="subsection-header">Macronutrients</div>', unsafe_allow_html=True)
-            macro_cols = st.columns(3)
-            macros = nutrition_summary["macros"]
-            with macro_cols[0]:
-                st.metric("🥩 Protein", f"{macros['protein']['value']:.1f}g", f"{macros['protein']['daily_value']}% DV")
-            with macro_cols[1]:
-                st.metric("🍚 Carbs", f"{macros['carbs']['value']:.1f}g", f"{macros['carbs']['daily_value']}% DV")
-            with macro_cols[2]:
-                st.metric("🫒 Fat", f"{macros['fat']['value']:.1f}g", f"{macros['fat']['daily_value']}% DV")
-            st.markdown('</div>', unsafe_allow_html=True)
-        with st.expander("Additional Nutrients"):
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            detail_cols = st.columns(2)
-            additional = nutrition_summary["additional"]
-            with detail_cols[0]:
-                st.metric("🌾 Fiber", f"{additional['fiber']['value']:.1f}g", f"{additional['fiber']['daily_value']}% DV")
-                st.metric("🍯 Sugar", f"{additional['sugar']['value']:.1f}g", "No DV established")
-            with detail_cols[1]:
-                st.metric("🥑 Saturated Fat", f"{additional['saturated_fat']['value']:.1f}g", f"{additional['saturated_fat']['daily_value']}% DV")
-            st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown(
+                """
+                <style>
+                  .ui-card.eq{min-height:220px;display:flex;flex-direction:column}
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+            col_left, col_right = st.columns([2, 3])
+            with col_left:
+                additional = nutrition_summary.get("additional", {})
+                fiber = additional.get("fiber", {})
+                sugar = additional.get("sugar", {})
+                sat = additional.get("saturated_fat", {})
+                add_chips = [
+                    f"<span class='chip'><span class='ico'>🌾</span>Fiber: {fiber.get('value', 0):.1f}g • {fiber.get('daily_value', 0)}% DV</span>",
+                    f"<span class='chip'><span class='ico'>🍯</span>Sugar: {sugar.get('value', 0):.1f}g</span>",
+                    f"<span class='chip'><span class='ico'>🥑</span>Saturated Fat: {sat.get('value', 0):.1f}g • {sat.get('daily_value', 0)}% DV</span>",
+                ]
+                st.markdown(
+                    f"<div class='ui-card eq'><div class='ui-card-title'>➕ Additional Nutrients</div><div class='chips'>{''.join(add_chips)}</div></div>",
+                    unsafe_allow_html=True,
+                )
+            with col_right:
+                macros = nutrition_summary["macros"]
+                macro_html = f"""
+                    <div class='ui-card eq'>
+                        <div class='ui-card-title'>📊 Macronutrients</div>
+                        <div class='chips'>
+                          <span class='chip'><span class='ico'>🥩</span>Protein: {macros['protein']['value']:.1f}g • {macros['protein']['daily_value']}% DV</span>
+                          <span class='chip'><span class='ico'>🍚</span>Carbs: {macros['carbs']['value']:.1f}g • {macros['carbs']['daily_value']}% DV</span>
+                          <span class='chip'><span class='ico'>🫒</span>Fat: {macros['fat']['value']:.1f}g • {macros['fat']['daily_value']}% DV</span>
+                        </div>
+                    </div>
+                """
+                st.markdown(macro_html, unsafe_allow_html=True)
+
+        
+        # Macronutrients are shown next to Additional Nutrients above to align with the image column
         components = nutrition.get("components", [])
         if components:
-            st.markdown('<div class="section-header">🍱 Meal Components</div>', unsafe_allow_html=True)
-            for item in components:
-                st.markdown('<div class="card">', unsafe_allow_html=True)
-                type_icons = {"main_dish":"🍽️","side_dish":"🥗","beverage":"🥤","condiment":"🧂"}
-                icon = type_icons.get(item['type'], "🍴")
-                st.markdown(f"### {icon} {item['name']}")
-                st.caption(f"Type: {item['type'].replace('_', ' ').title()} | {item['serving']}")
-                c1, c2, c3 = st.columns(3)
-                n = item['nutrition']
-                c1.metric("Calories", f"{n['calories']} kcal")
-                c2.metric("Protein", f"{n['protein']:.1f}g")
-                c3.metric("Carbs", f"{n['carbs']:.1f}g")
-                with st.expander("More Details"):
-                    d1, d2 = st.columns(2)
-                    d1.metric("Fat", f"{n['fat']:.1f}g"); d1.metric("Fiber", f"{n['fiber']:.1f}g")
-                    d2.metric("Sugar", f"{n['sugar']:.1f}g"); d2.metric("Saturated Fat", f"{n['saturated_fat']:.1f}g")
-                    if item.get('diet_tags'):
-                        tags_html = " ".join([f"<span class='diet-tag'>{tag}</span>" for tag in item['diet_tags']])
-                        st.markdown(f"<div>**Diet Tags:** {tags_html}</div>", unsafe_allow_html=True)
-                st.markdown('</div>', unsafe_allow_html=True)
-        colw, cols = st.columns(2)
-        with colw:
-            warnings = nutrition_summary.get("warnings", [])
-            if warnings:
-                with st.expander("⚠️ Warnings", expanded=False):
-                    for warning in warnings:
-                        st.warning(warning, icon="⚠️")
-        with cols:
-            with st.expander("💡 AI Suggestions", expanded=False):
-                # Use cached suggestions (already fetched during analysis)
-                for tip in suggestions:
-                    st.write(tip)
+            with st.expander("🍱 Meal Components", expanded=False):
+                for item in components:
+                    st.markdown('<div class="card">', unsafe_allow_html=True)
+                    type_icons = {"main_dish":"🍽️","side_dish":"🥗","beverage":"🥤","condiment":"🧂"}
+                    icon = type_icons.get(item['type'], "🍴")
+                    st.markdown(f"### {icon} {item['name']}")
+                    st.caption(f"Type: {item['type'].replace('_', ' ').title()} | {item['serving']}")
+                    c1, c2, c3 = st.columns(3)
+                    n = item['nutrition']
+                    c1.metric("Calories", f"{n['calories']} kcal")
+                    c2.metric("Protein", f"{n['protein']:.1f}g")
+                    c3.metric("Carbs", f"{n['carbs']:.1f}g")
+                    with st.expander("More Details"):
+                        d1, d2 = st.columns(2)
+                        d1.metric("Fat", f"{n['fat']:.1f}g"); d1.metric("Fiber", f"{n['fiber']:.1f}g")
+                        d2.metric("Sugar", f"{n['sugar']:.1f}g"); d2.metric("Saturated Fat", f"{n['saturated_fat']:.1f}g")
+                        if item.get('diet_tags'):
+                            tags_html = " ".join([f"<span class='diet-tag'>{tag}</span>" for tag in item['diet_tags']])
+                            st.markdown(f"<div>**Diet Tags:** {tags_html}</div>", unsafe_allow_html=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
+        # Warnings and AI Suggestions are shown near the image above.
         
-        # Chat section - always available after analysis (both cached and fresh)
-        if nutrition:
+        # Chat section - available only when API is enabled
+        if nutrition and not demo_mode:
             st.markdown('<hr/>', unsafe_allow_html=True)
             st.markdown('<div class="subsection-header">Ask about your meal</div>', unsafe_allow_html=True)
             chat_suggestions = ["Is this good for bulking?", "How to reduce calories?", "Is this balanced for dinner?"]
@@ -525,6 +622,9 @@ def main():
                         async for token in handle_chat(analyzer, user_question, nutrition):
                             yield token
                     st.write_stream(stream_answer())
+        elif nutrition and demo_mode:
+            st.markdown('<hr/>', unsafe_allow_html=True)
+            st.info("Chat is disabled in Demo Mode. Disable Demo Mode in the sidebar to ask questions.")
 
 if __name__ == "__main__":
     main()

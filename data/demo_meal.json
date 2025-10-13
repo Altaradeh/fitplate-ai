@@ -1,92 +1,73 @@
 {
-  "status": "success",
-  "meal_info": {
-    "name": "Chicken, Rice and Broccoli",
-    "confidence": 0.86,
-    "serving_size": "1 plate"
-  },
-  "nutrition_summary": {
-    "calories": { "value": 519, "daily_value": 26 },
-    "macros": {
-      "protein": { "value": 39.7, "daily_value": 79 },
-      "carbs": { "value": 56.2, "daily_value": 25 },
-      "fat": { "value": 14.4, "daily_value": 22 }
-    },
-    "additional": {
-      "fiber": { "value": 8.6, "daily_value": 30 },
-      "sugar": { "value": 2.9, "warning": false },
-      "saturated_fat": { "value": 3.8, "daily_value": 19 }
-    },
-    "diet_tags": ["balanced", "whole-foods", "high-protein"],
-    "warnings": ["Watch sodium if using sauces."]
-  },
-  "components": [
-    {
-      "name": "Grilled Chicken",
-      "type": "main_dish",
-      "serving": "150 g",
-      "nutrition": {
-        "calories": 248,
-        "protein": 31.0,
-        "carbs": 0.0,
-        "fat": 12.0,
-        "fiber": 0.0,
-        "sugar": 0.0,
-        "saturated_fat": 3.3
+  "dish": {"dish_name": "Grilled Chicken Salad", "confidence": 0.92},
+  "nutrition": {
+    "meal_info": {"serving_size": "1 bowl (420g)"},
+    "nutrition_summary": {
+      "calories": {"value": 480, "daily_value": 24},
+      "macros": {
+        "protein": {"value": 42, "daily_value": 84},
+        "carbs": {"value": 38, "daily_value": 13},
+        "fat": {"value": 16, "daily_value": 20}
       },
-      "diet_tags": ["high-protein", "gluten-free"]
-    },
-    {
-      "name": "Brown Rice",
-      "type": "side_dish",
-      "serving": "1 cup",
-      "nutrition": {
-        "calories": 216,
-        "protein": 5.0,
-        "carbs": 45.0,
-        "fat": 1.8,
-        "fiber": 3.5,
-        "sugar": 0.7,
-        "saturated_fat": 0.4
+      "additional": {
+        "fiber": {"value": 8, "daily_value": 32},
+        "sugar": {"value": 7, "daily_value": 0},
+        "saturated_fat": {"value": 3.5, "daily_value": 18}
       },
-      "diet_tags": ["whole-grain", "vegan"]
+      "warnings": ["Consider reducing dressing to lower fats", "Moderate sodium content"],
+      "diet_tags": ["balanced", "high-protein"]
     },
-    {
-      "name": "Steamed Broccoli",
-      "type": "side_dish",
-      "serving": "1 cup",
-      "nutrition": {
-        "calories": 55,
-        "protein": 3.7,
-        "carbs": 11.2,
-        "fat": 0.6,
-        "fiber": 5.1,
-        "sugar": 2.2,
-        "saturated_fat": 0.1
+    "components": [
+      {
+        "name": "Grilled chicken breast",
+        "type": "main_dish",
+        "serving": "150g",
+        "nutrition": {
+          "calories": 250,
+          "protein": 35,
+          "carbs": 0,
+          "fat": 10,
+          "fiber": 0,
+          "sugar": 0,
+          "saturated_fat": 2
+        },
+        "diet_tags": ["high-protein"]
       },
-      "diet_tags": ["high-fiber", "vegan"]
-    }
-  ],
-  "ai_insights": {
-    "recommendations": [
-      "Add a small salad for micronutrients.",
-      "Consider olive oil drizzle for healthy fats."
-    ],
-    "health_score": 82,
-    "meal_type": "dinner",
-    "dietary_considerations": ["balanced", "high-protein"],
-    "meal_rating": 8,
-    "suggestions": [
-      "Swap white rice with brown or quinoa to boost fiber.",
-      "Add a colorful veggie for vitamins (bell peppers, spinach)."
-    ],
-    "improvements": [
-      "Reduce added sauces high in sugar.",
-      "Aim for 25–35g protein for satiety."
-    ],
-    "positive_aspects": [
-      "Great lean protein choice.",
-      "Whole grains support steady energy."
+      {
+        "name": "Mixed greens, tomatoes, cucumbers",
+        "type": "side_dish",
+        "serving": "200g",
+        "nutrition": {
+          "calories": 80,
+          "protein": 4,
+          "carbs": 14,
+          "fat": 2,
+          "fiber": 5,
+          "sugar": 5,
+          "saturated_fat": 0.2
+        },
+        "diet_tags": ["low-fat", "fiber-rich"]
+      },
+      {
+        "name": "Olive oil vinaigrette",
+        "type": "condiment",
+        "serving": "2 tbsp",
+        "nutrition": {
+          "calories": 150,
+          "protein": 0,
+          "carbs": 4,
+          "fat": 14,
+          "fiber": 0,
+          "sugar": 2,
+          "saturated_fat": 1.3
+        },
+        "diet_tags": ["mediterranean"]
+      }
     ]
-  }
+  },
+  "suggestions": [
+    "Add a handful of quinoa for complex carbs and extra fiber.",
+    "Swap part of the dressing for lemon juice to reduce calories.",
+    "Include a piece of fruit on the side to round out micronutrients."
+  ]
 }
