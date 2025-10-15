@@ -35,6 +35,34 @@ client: Optional[AsyncOpenAI] = None
 
 from app.config import VISION_MODEL, CHAT_MODEL
 
+# Load icons from JSON file
+def load_icons() -> Dict[str, str]:
+    """Load icons from the icons.json file."""
+    try:
+        icons_path = os.path.join(os.path.dirname(__file__), 'icons.json')
+        with open(icons_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data.get('icons', {})
+    except Exception as e:
+        logger.warning(f"Could not load icons.json: {e}")
+        return {}
+
+# Global icons dictionary
+ICONS = load_icons()
+
+def get_icon(key: str, default: str = "🍴") -> str:
+    """Get an icon for a given key, with fallback to default."""
+    # Try exact match first
+    if key.lower() in ICONS:
+        return ICONS[key.lower()]
+    
+    # Try partial matches for compound terms
+    for icon_key, icon_value in ICONS.items():
+        if key.lower() in icon_key or icon_key in key.lower():
+            return icon_value
+    
+    return default
+
 async def verify_openai_access(client: AsyncOpenAI) -> Tuple[bool, Optional[str]]:
     try:
         response = await client.chat.completions.create(
@@ -55,9 +83,9 @@ async def verify_openai_access(client: AsyncOpenAI) -> Tuple[bool, Optional[str]
     
     return False, "No response received from OpenAI API"
 
-async def process_image(image, analyzer: FoodAnalyzerService):
+async def process_image(image, analyzer: FoodAnalyzerService, user_preferences: Dict[str, Any]):
     try:
-        analysis_result = await analyzer.analyze_meal(image)
+        analysis_result = await analyzer.analyze_meal(image, user_preferences)
         if not analysis_result or analysis_result.get("status") == "error":
             error_msg = analysis_result.get("error", "Unknown error") if analysis_result else "No result"
             logger.error(f"Analysis failed: {error_msg}")
@@ -69,12 +97,23 @@ async def process_image(image, analyzer: FoodAnalyzerService):
         components = analysis_result.get("components", [])
         dish_name = meal_info.get("name", "Unknown Dish")
         confidence = meal_info.get("confidence", 0.0)
+        
+        # Check for non-food items
+        if dish_name in ["Non-Food Item Detected", "Unidentified Food"] or confidence == 0.0:
+            logger.warning("Non-food item detected in uploaded image")
+            return {
+                "dish_name": "Non-Food Item",
+                "confidence": 0.0,
+                "is_non_food": True
+            }, analysis_result
+            
         if dish_name == "Unknown Dish" and components:
             dish_name = components[0].get("name", "Unknown Dish")
         logger.info(f"Successfully analyzed: {dish_name} (confidence: {confidence:.2f})")
         return {
             "dish_name": dish_name,
-            "confidence": confidence
+            "confidence": confidence,
+            "is_non_food": False
         }, analysis_result
     except Exception as e:
         logger.error(f"Error processing image: {str(e)}")
@@ -83,14 +122,14 @@ async def process_image(image, analyzer: FoodAnalyzerService):
             "confidence": 0.0
         }, None
 
-async def handle_chat(analyzer: FoodAnalyzerService, question: str, analysis_result: Dict[str, Any]):
+async def handle_chat(analyzer: FoodAnalyzerService, question: str, analysis_result: Dict[str, Any], user_preferences: Dict[str, Any]):
     import time
     from datetime import datetime
     try:
         _ts = datetime.utcnow().isoformat()
         _start = time.perf_counter()
         logger.info(f"[Chat][START] ts={_ts} question_len={len(question)}")
-        stream = await analyzer.answer_question(question, analysis_result)
+        stream = await analyzer.answer_question(question, analysis_result, user_preferences)
         token_count = 0
         async for chunk in stream:
             token_count += 1
@@ -103,6 +142,68 @@ async def handle_chat(analyzer: FoodAnalyzerService, question: str, analysis_res
         _dur_ms = int((time.perf_counter() - _start) * 1000) if '_start' in locals() else 0
         logger.error(f"[Chat][ERROR] dur_ms={_dur_ms} error={str(e)}")
         yield f"Sorry, I encountered an error: {str(e)}"
+
+def generate_chat_suggestions(user_preferences: Dict[str, Any]) -> List[str]:
+    """Generate personalized chat suggestions based on user preferences"""
+    suggestions = []
+    
+    goal = user_preferences.get('goal', 'Balanced')
+    diet = user_preferences.get('diet', 'None')
+    health_conditions = user_preferences.get('health_conditions', [])
+    calorie_target = user_preferences.get('calorie_target', 2500)
+    
+    # Goal-adapted questions
+    if goal == 'Bulking':
+        suggestions.extend([
+            "Does this meal provide enough protein for bulking?",
+            "How can I add more calories to support my bulking goals?"
+        ])
+    elif goal == 'Cutting':
+        suggestions.extend([
+            "How can I reduce calories while keeping this meal satisfying?",
+            f"Is this meal appropriate for my daily calorie target of {calorie_target} kcal?"
+        ])
+    elif goal == 'Maintenance':
+        suggestions.extend([
+            "Does this meal provide enough protein for maintenance?",
+            f"Is this meal appropriate for my daily calorie target of {calorie_target} kcal?"
+        ])
+    else:  # Balanced
+        suggestions.extend([
+            "Is this a well-balanced meal for my goals?",
+            "Can I add more vegetables or fiber to improve this meal?"
+        ])
+    
+    # Diet-adapted questions
+    if diet != 'None':
+        suggestions.append(f"Is this meal suitable for a {diet} diet?")
+        if diet in ['Keto', 'Vegan', 'Vegetarian', 'Mediterranean']:
+            suggestions.append(f"Which ingredients should I replace to make this meal compliant with a {diet} diet?")
+    
+    # Health condition-adapted questions
+    if health_conditions:
+        # Handle multiple conditions - pick the most relevant ones
+        primary_condition = health_conditions[0]
+        suggestions.append(f"Is this meal suitable for someone with {primary_condition}?")
+        
+        # Add specific allergen questions based on selected conditions
+        if 'Celiac Disease' in health_conditions:
+            suggestions.append("Does this meal contain gluten?")
+        elif 'Lactose Intolerance' in health_conditions:
+            suggestions.append("Does this meal contain lactose?")
+        elif len(health_conditions) > 1:
+            # If multiple conditions but no specific allergen ones, ask about all conditions
+            conditions_str = ", ".join(health_conditions[:2])  # Limit to first 2 for readability
+            suggestions.append(f"Is this meal safe for my health conditions ({conditions_str})?")
+    
+    # Always include some general options
+    suggestions.extend([
+        "Which ingredients should I reduce or replace to make this meal healthier?",
+        "What are the main nutritional benefits of this meal?"
+    ])
+    
+    # Return max 3 suggestions to fit the UI nicely
+    return suggestions[:3]
 
 def load_styles():
     st.markdown(
@@ -218,7 +319,7 @@ def theme_toggle():
 
 def init_preferences():
     if 'prefs' not in st.session_state:
-        st.session_state.prefs = {'goal': 'balanced', 'diet': 'none', 'calorie_target': None}
+        st.session_state.prefs = {'goal': 'Balanced', 'diet': 'None', 'health_conditions': [], 'calorie_target': 2500}
     st.markdown(
         """
         <script>
@@ -244,20 +345,21 @@ def init_preferences():
 def preferences_sidebar():
     with st.sidebar:
         st.markdown("### 🎯 Preferences")
-        goal = st.selectbox("Goal", ["balanced", "bulking", "cutting", "maintenance"], index=["balanced","bulking","cutting","maintenance"].index(st.session_state.prefs.get('goal','balanced')))
-        diet = st.selectbox("Diet", ["none", "keto", "vegan", "vegetarian", "mediterranean"], index=["none","keto","vegan","vegetarian","mediterranean"].index(st.session_state.prefs.get('diet','none')))
-        cal = st.text_input("Daily calorie target (optional)", value=str(st.session_state.prefs.get('calorie_target') or ''))
+        goal = st.selectbox("Goal", ["Balanced", "Bulking", "Cutting", "Maintenance"], index=["Balanced","Bulking","Cutting","Maintenance"].index(st.session_state.prefs.get('goal','Balanced')))
+        diet = st.selectbox("Diet", ["None", "Keto", "Vegan", "Vegetarian", "Mediterranean"], index=["None","Keto","Vegan","Vegetarian","Mediterranean"].index(st.session_state.prefs.get('diet','None')))
+        health_conditions = st.multiselect("Health Conditions", ["Diabetes", "Heart disease", "High blood pressure", "High cholesterol", "Celiac Disease", "Lactose Intolerance"], default=st.session_state.prefs.get('health_conditions', []))
+        cal = st.text_input("Daily calorie target", value=str(st.session_state.prefs.get('calorie_target') or '2500'))
         cal_val = None
         try:
             cal_val = int(cal) if cal.strip() else None
         except Exception:
             pass
-        st.session_state.prefs.update({'goal': goal, 'diet': diet, 'calorie_target': cal_val})
+        st.session_state.prefs.update({'goal': goal, 'diet': diet, 'health_conditions': health_conditions, 'calorie_target': cal_val})
         st.markdown(
             f"""
             <script>
             try {{
-              const prefs = {json.dumps({'goal': goal, 'diet': diet, 'calorie_target': cal_val})};
+              const prefs = {json.dumps({'goal': goal, 'diet': diet, 'health_conditions': health_conditions, 'calorie_target': cal_val})};
               window.localStorage.setItem('fitplate-prefs', JSON.stringify(prefs));
             }} catch(e) {{}}
             </script>
@@ -344,7 +446,7 @@ def main():
     if 'last_camera_ts' not in st.session_state:
         st.session_state.last_camera_ts = 0.0
     with tab_upload:
-        uploaded_file = st.file_uploader("", type=["jpg", "jpeg", "png"])
+        uploaded_file = st.file_uploader("Upload Food Image", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
         if uploaded_file is not None:
             up_bytes = uploaded_file.getvalue()
             up_hash = __import__('hashlib').md5(up_bytes).hexdigest()
@@ -415,7 +517,7 @@ def main():
             else:
                 with st.spinner("Analyzing your dish..."):
                     loop = asyncio.get_event_loop()
-                    dish, nutrition = loop.run_until_complete(process_image(image, analyzer))
+                    dish, nutrition = loop.run_until_complete(process_image(image, analyzer, st.session_state.prefs))
             loading_placeholder.empty()
             
             # Get AI suggestions (API) or use demo suggestions
@@ -423,7 +525,7 @@ def main():
                 suggestions = suggestions if 'suggestions' in locals() else []
             else:
                 with st.spinner("Getting personalized suggestions..."):
-                    suggestions = loop.run_until_complete(analyzer.suggest_improvements(nutrition))
+                    suggestions = loop.run_until_complete(analyzer.suggest_improvements(nutrition, st.session_state.prefs))
             
             # Cache the results including suggestions
             st.session_state.analysis_cache[image_hash] = {
@@ -431,6 +533,21 @@ def main():
                 'nutrition': nutrition,
                 'suggestions': suggestions
             }
+        
+        # Check if this is a non-food item
+        if dish.get('is_non_food', False) or dish['dish_name'] == "Non-Food Item":
+            st.warning("🚫 **Non-Food Item Detected**")
+            st.markdown("""
+            It looks like the uploaded image doesn't contain food items. 
+            
+            **Please try uploading an image that contains:**
+            - A meal or dish
+            - Individual food items
+            - Snacks or beverages
+            
+            For best results, ensure the food is clearly visible and well-lit.
+            """)
+            return
         
         # Always render the UI (using cached or fresh data)
         if not nutrition or not nutrition.get("nutrition_summary"):
@@ -441,7 +558,7 @@ def main():
         nutrition_summary = nutrition["nutrition_summary"]
         meal_info = nutrition.get("meal_info", {})
         confidence = dish['confidence'] * 100
-        confidence_emoji = "🎯" if confidence >= 90 else "✨" if confidence >= 70 else "👀"
+        confidence_emoji = get_icon("confidence_high") if confidence >= 90 else get_icon("confidence_medium") if confidence >= 70 else get_icon("confidence_low")
         diet_tags = nutrition_summary.get("diet_tags", [])
 
         # Show left column (meal info) and right column (image)
@@ -489,7 +606,7 @@ def main():
                 cal_dv = nutrition_summary["calories"]["daily_value"]
                 serving_size = meal_info.get("serving_size", "N/A")
                 title_html = f"<div class='meal-title-row'><div class='meal-title'>{confidence_emoji} {dish['dish_name']}</div><span class='meal-badge'>{confidence:.1f}%</span></div>"
-                meta_html = f"<div class='meal-meta'>🔥 {cal_val} kcal • {cal_dv}% DV · 📏 Serving: {serving_size}</div>"
+                meta_html = f"<div class='meal-meta'>{get_icon('high calories')} {cal_val} kcal • {cal_dv}% DV · 📏 Serving: {serving_size}</div>"
                 tags_html = ""
                 if diet_tags:
                     tags_html = "<div class='diet-chips'>" + " ".join([f"<span class='diet-chip'>🏷️ {tag}</span>" for tag in diet_tags]) + "</div>"
@@ -508,30 +625,28 @@ def main():
                 """
                 st.markdown(meal_card_html, unsafe_allow_html=True)
 
-                # Icon helpers based on common nutrition keywords
+                # Icon helpers using centralized icon system
                 def _warn_icon(txt: str) -> str:
+                    """Get warning icon based on text content using icons.json"""
                     t = txt.lower()
-                    if "sodium" in t or "salt" in t: return "🧂"
-                    if "sugar" in t: return "🍬"
-                    if "fat" in t and "saturated" in t: return "🧈"
-                    if "fat" in t: return "🥓"
-                    if "calorie" in t: return "🔥"
-                    if "fiber" in t: return "🌾"
-                    if "protein" in t: return "🥩"
-                    if "carb" in t: return "🍞"
-                    return "⚠️"
+                    # Try to find the most specific match first
+                    for keyword in ["saturated fat", "trans fat", "high sodium", "added sugar", "high calories", 
+                                   "sodium", "salt", "sugar", "fat", "calorie", "fiber", "protein", "carb"]:
+                        if keyword in t:
+                            return get_icon(keyword, "⚠️")
+                    return get_icon("allergen", "⚠️")
 
                 def _sugg_icon(txt: str) -> str:
+                    """Get suggestion icon based on text content using icons.json"""
                     t = txt.lower()
-                    if "vegetable" in t or "veggie" in t or "broccoli" in t or "salad" in t: return "🥦"
-                    if "fruit" in t: return "🍎"
-                    if "protein" in t or "chicken" in t: return "🥩"
-                    if "fiber" in t or "whole" in t or "quinoa" in t: return "🌾"
-                    if "fat" in t and ("olive" in t or "avocado" in t): return "🫒"
-                    if "sugar" in t: return "🍬"
-                    if "water" in t or "hydrate" in t: return "💧"
-                    if "calorie" in t or "reduce" in t: return "⚡"
-                    return "💡"
+                    # Try to find the most specific match first
+                    for keyword in ["add vegetables", "add fruits", "steamed vegetables", "grilled chicken", 
+                                   "salmon steak", "avocado toast", "whole grain", "olive oil", "healthy fat",
+                                   "vegetable", "veggie", "broccoli", "salad", "fruit", "protein", "chicken", 
+                                   "fiber", "quinoa", "avocado", "water", "hydrate", "reduce calories"]:
+                        if keyword in t:
+                            return get_icon(keyword, "💡")
+                    return get_icon("balanced", "💡")
 
                 # Show AI Suggestions and Warnings below the Dish info
                 if suggestions:
@@ -540,7 +655,7 @@ def main():
                         for s in suggestions
                     ]
                     st.markdown(
-                        f"<div class='ui-card'><div class='ui-card-title'>💡 AI Suggestions</div><div class='chips'>{''.join(sugg_chips)}</div></div>",
+                        f"<div class='ui-card'><div class='ui-card-title'>{get_icon('ai_suggestions')} AI Suggestions</div><div class='chips'>{''.join(sugg_chips)}</div></div>",
                         unsafe_allow_html=True,
                     )
 
@@ -551,7 +666,7 @@ def main():
                         for w in warn_list
                     ]
                     st.markdown(
-                        f"<div class='ui-card'><div class='ui-card-title'>⚠️ Warnings</div><div class='chips'>{''.join(warn_chips)}</div></div>",
+                        f"<div class='ui-card'><div class='ui-card-title'>{get_icon('warnings')} Warnings</div><div class='chips'>{''.join(warn_chips)}</div></div>",
                         unsafe_allow_html=True,
                     )
 
@@ -585,23 +700,23 @@ def main():
                 sugar = additional.get("sugar", {})
                 sat = additional.get("saturated_fat", {})
                 add_chips = [
-                    f"<span class='chip'><span class='ico'>🌾</span>Fiber: {fiber.get('value', 0):.1f}g • {fiber.get('daily_value', 0)}% DV</span>",
-                    f"<span class='chip'><span class='ico'>🍯</span>Sugar: {sugar.get('value', 0):.1f}g</span>",
-                    f"<span class='chip'><span class='ico'>🥑</span>Saturated Fat: {sat.get('value', 0):.1f}g • {sat.get('daily_value', 0)}% DV</span>",
+                    f"<span class='chip'><span class='ico'>{get_icon('fiber')}</span>Fiber: {fiber.get('value', 0):.1f}g • {fiber.get('daily_value', 0)}% DV</span>",
+                    f"<span class='chip'><span class='ico'>{get_icon('sugar')}</span>Sugar: {sugar.get('value', 0):.1f}g</span>",
+                    f"<span class='chip'><span class='ico'>{get_icon('saturated fat')}</span>Saturated Fat: {sat.get('value', 0):.1f}g • {sat.get('daily_value', 0)}% DV</span>",
                 ]
                 st.markdown(
-                    f"<div class='ui-card eq'><div class='ui-card-title'>➕ Additional Nutrients</div><div class='chips'>{''.join(add_chips)}</div></div>",
+                    f"<div class='ui-card eq'><div class='ui-card-title'>{get_icon('additional_nutrients')} Additional Nutrients</div><div class='chips'>{''.join(add_chips)}</div></div>",
                     unsafe_allow_html=True,
                 )
             with col_right:
                 macros = nutrition_summary["macros"]
                 macro_html = f"""
                     <div class='ui-card eq'>
-                        <div class='ui-card-title'>📊 Macronutrients</div>
+                        <div class='ui-card-title'>{get_icon('nutrition')} Macronutrients</div>
                         <div class='chips'>
-                          <span class='chip'><span class='ico'>🥩</span>Protein: {macros['protein']['value']:.1f}g • {macros['protein']['daily_value']}% DV</span>
-                          <span class='chip'><span class='ico'>🍚</span>Carbs: {macros['carbs']['value']:.1f}g • {macros['carbs']['daily_value']}% DV</span>
-                          <span class='chip'><span class='ico'>🫒</span>Fat: {macros['fat']['value']:.1f}g • {macros['fat']['daily_value']}% DV</span>
+                          <span class='chip'><span class='ico'>{get_icon('protein')}</span>Protein: {macros['protein']['value']:.1f}g • {macros['protein']['daily_value']}% DV</span>
+                          <span class='chip'><span class='ico'>{get_icon('carb')}</span>Carbs: {macros['carbs']['value']:.1f}g • {macros['carbs']['daily_value']}% DV</span>
+                          <span class='chip'><span class='ico'>{get_icon('healthy fat')}</span>Fat: {macros['fat']['value']:.1f}g • {macros['fat']['daily_value']}% DV</span>
                         </div>
                     </div>
                 """
@@ -611,11 +726,11 @@ def main():
         # Macronutrients are shown next to Additional Nutrients above to align with the image column
         components = nutrition.get("components", [])
         if components:
-            with st.expander("🍱 Meal Components", expanded=False):
+            with st.expander(f"{get_icon('meal_components')} Meal Components", expanded=False):
                 for item in components:
                     st.markdown('<div class="card">', unsafe_allow_html=True)
-                    type_icons = {"main_dish":"🍽️","side_dish":"🥗","beverage":"🥤","condiment":"🧂"}
-                    icon = type_icons.get(item['type'], "🍴")
+                    # Use centralized icon system for component types
+                    icon = get_icon(item['type'], get_icon('unknown'))
                     st.markdown(f"### {icon} {item['name']}")
                     st.caption(f"Type: {item['type'].replace('_', ' ').title()} | {item['serving']}")
                     c1, c2, c3 = st.columns(3)
@@ -637,7 +752,10 @@ def main():
         if nutrition and not demo_mode:
             st.markdown('<hr/>', unsafe_allow_html=True)
             st.markdown('<div class="subsection-header">Ask about your meal</div>', unsafe_allow_html=True)
-            chat_suggestions = ["Is this good for bulking?", "How to reduce calories?", "Is this balanced for dinner?"]
+            
+            # Generate personalized chat suggestions
+            chat_suggestions = generate_chat_suggestions(st.session_state.prefs)
+            
             cols = st.columns(len(chat_suggestions))
             preset = None
             for i, (col, s) in enumerate(zip(cols, chat_suggestions)):
@@ -654,7 +772,7 @@ def main():
                     st.write(user_question)
                 with st.chat_message("assistant", avatar="🍽️"):
                     async def stream_answer():
-                        async for token in handle_chat(analyzer, user_question, nutrition):
+                        async for token in handle_chat(analyzer, user_question, nutrition, st.session_state.prefs):
                             yield token
                     st.write_stream(stream_answer())
         elif nutrition and demo_mode:
