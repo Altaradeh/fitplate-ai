@@ -1,411 +1,145 @@
-/*
- * Fresh Lime Theme (v9.0) - LIGHT & FRESH GREEN PALETTE
- * Inspired by modern food apps - bright, clean, and appetizing
- */
-
 :root {
-    /* --- FRESH LIME PALETTE --- */
-    --color-primary: #8BC34A; 	 	/* Fresh Lime Green (Main) */
-    --color-secondary: #4CAF50; 	 	/* Vibrant Green (Accent) */
-    --color-tertiary: #66BB6A; 	 	/* Medium Green */
-    --color-accent-light: #AED581; 	/* Light Lime */
-    --color-accent-yellow: #CDDC39; 	/* Lime Yellow */
-    --color-text-dark: #1B5E20; 	/* Dark Green */
-    --color-text-medium: #388E3C; 	/* Medium Green Text */
-    --color-text-light: #F1F8E9; 	/* Very Light Green Tint */
-    --color-card-light: #FFFFFF; 	/* White Cards */
-    --color-background: #A5D6A7; 	/* Soft Light Green Background */
-    --color-background-gradient: #C5E1A5; /* Lighter Green */
-    
-    /* --- SHADOWS & DEPTH --- */
-    --shadow-soft: 0 4px 20px rgba(27, 94, 32, 0.15);
-    --shadow-card: 0 2px 12px rgba(27, 94, 32, 0.1);
+    --primary-green: #4CAF50;
+    --secondary-green: #66BB6A; /* slightly brighter for contrast */
+    --accent-green: #C8E6C9;
+    --light-bg: #F5FFFA;
+    --card-bg: #E8F5E9; /* light green card background for contrast */
+    --text-dark: #1B5E20; /* darkest green for main text */
+    --text-medium: #2E7D32; /* medium green for highlights */
+    --text-light: #388E3C; /* lighter green for secondary text */
+    --shadow-soft: 0 4px 15px rgba(0, 0, 0, 0.05);
+    --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.08);
+    --border-radius: 16px;
+    --transition: 0.3s ease-in-out;
 }
 
-/* --- Global & Background --- */
-
+/* Body */
 body, .stApp {
-    background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-background) 100%) !important;
-    color: var(--color-text-dark) !important;
-    font-family: 'Inter', 'Open Sans', sans-serif !important; 
-    font-weight: 400; 
-    transition: all 0.5s ease-in-out;
+    background: var(--light-bg) !important;
+    font-family: 'Inter', 'Montserrat', sans-serif !important;
+    color: var(--text-dark) !important;
+    transition: all var(--transition);
 }
 
-h1, h2, h3, h4 {
-    font-family: 'Montserrat', 'Inter', sans-serif !important; 
-    font-weight: 800;
-    color: var(--color-text-dark);
-}
-
-.meal-title {
-    font-size: 4.5rem; 
-    font-weight: 900;
-    color: var(--color-text-dark);
-    letter-spacing: 3px; 
-    text-transform: uppercase;
-    text-shadow: 2px 2px 4px rgba(255, 255, 255, 0.5);
-    animation: pulseTitle 2.5s infinite alternate; 
-}
-
-/* --- Top Bar --- */
-
+/* Top Bar */
 .topbar {
-    position: sticky;
-    top: 0;
-    z-index: 1000;
-    background: linear-gradient(90deg, #FFFFFF 0%, #F1F8E9 100%) !important;
-    box-shadow: 2px 2px 15px rgba(27, 94, 32, 0.15);
-    border-bottom: 3px solid var(--color-secondary);
-    padding: 1.5rem 0;
-    border-radius: 20px 20px 20px 20px; 
+    background: var(--card-bg) !important;
+    border-bottom: 2px solid var(--secondary-green);
+    padding: 1rem 2rem;
+    box-shadow: var(--shadow-soft);
+    border-radius: var(--border-radius) var(--border-radius) 0 0;
+    color: var(--text-dark);
 }
 
-.topbar .title {
-    font-size: 2.8rem;
-    font-weight: 900;
-    color: var(--color-text-dark);
-    letter-spacing: 2px;
-    font-family: 'Montserrat', sans-serif !important;
-}
-
-/* --- Sidebar Styling --- */
-
+/* Sidebar */
 [data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #F1F8E9 0%, #83c835 100%) !important;
-    box-shadow: 0 4px 20px rgba(27, 94, 32, 0.1); 
-    padding: 3rem 2rem !important;
-    border-right: 2px solid var(--color-accent-light);
-    border-radius: 0 20px 20px 0; 
-    overflow: hidden;
-}
-
-/* Sidebar Text - Dark Green for Contrast */
-[data-testid="stSidebar"] * {
-    color: var(--color-text-dark) !important;
+    background: var(--accent-green) !important;
+    border-right: 2px solid var(--secondary-green);
+    padding: 2rem;
+    border-radius: 0 var(--border-radius) var(--border-radius) 0;
+    box-shadow: var(--shadow-soft);
+    color: var(--text-dark);
 }
 
 [data-testid="stSidebar"] h2, 
 [data-testid="stSidebar"] label {
-    color: var(--color-text-dark) !important; 
-    font-family: 'Inter', 'Open Sans', sans-serif !important;
+    color: var(--text-dark) !important;
     font-weight: 700;
 }
 
-[data-testid="stSidebar"] h2 {
-    color: var(--color-text-dark) !important; 
-    font-weight: 900;
-    margin-bottom: 2.5rem;
-    padding-bottom: 0.8rem;
-    text-transform: uppercase;
-    border-bottom: 3px solid var(--color-secondary);
-    font-family: 'Montserrat', sans-serif !important;
-    letter-spacing: 1px;
-}
-
-/* Input Focus States */
-.stSelectbox div[data-testid="stDecoration"]:focus-within,
-.stNumberInput div[data-baseweb="input"]:focus-within {
-    border-color: var(--color-secondary); 
-    box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.2);
-}
-
-/* Selectbox - Dark Green Text on White Background */
-.stSelectbox div[data-baseweb="select"] {
-    background-color: #FFFFFF !important;
-    border: 2px solid var(--color-accent-light) !important;
-    border-radius: 10px !important;
-}
-
-.stSelectbox div[data-baseweb="select"] div[role="button"] {
-    color: var(--color-text-dark) !important;
-    font-weight: 700;
-    background-color: #FFFFFF !important;
-}
-
-.stSelectbox svg {
-    fill: var(--color-secondary) !important; 
-}
-
-/* Dropdown Menu Items - Dark text on white */
-.stSelectbox div[role="listbox"] {
-    background-color: #FFFFFF !important;
-}
-
-.stSelectbox div[role="option"] {
-    color: var(--color-text-dark) !important;
-    background-color: #FFFFFF !important;
-}
-
-.stSelectbox div[role="option"]:hover {
-    background-color: var(--color-accent-light) !important;
-    color: var(--color-text-dark) !important;
-}
-
-/* Number Input - Dark Green Text on White Background */
-.stNumberInput div[data-baseweb="input"] {
-    background-color: #FFFFFF !important;
-    border: 2px solid var(--color-accent-light) !important;
-    border-radius: 10px !important;
-}
-
-.stNumberInput input {
-    color: var(--color-text-dark) !important;
-    font-weight: 900;
-    font-size: 1.3rem;
-    background-color: #FFFFFF !important;
-}
-
-/* --- Main Content Cards --- */
-
-.ui-card {
-    background: #FFFFFF;
-    border-radius: 20px; 
-    padding: 3.5rem; 
-    margin-bottom: 3.5rem;
+/* Cards */
+.stCard, .ui-card {
+    background: var(--card-bg);
+    border-radius: var(--border-radius);
+    padding: 2rem;
+    margin-bottom: 2rem;
     box-shadow: var(--shadow-card);
-    border: none;
-    opacity: 0;
-    animation: fadeInSlideUp 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; 
-    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-    position: relative;
-    overflow: hidden;
+    transition: transform var(--transition), box-shadow var(--transition);
+    color: var(--text-dark);
 }
 
-.ui-card::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(139, 195, 74, 0.1), transparent);
-    transition: left 0.5s ease;
+.stCard:hover, .ui-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.12);
 }
 
-.ui-card:hover::before {
-    left: 100%;
+/* Titles */
+h1, h2, h3, h4 {
+    color: var(--text-dark);
+    font-weight: 800;
 }
 
-.ui-card:hover {
-    transform: translateY(-8px) scale(1.01); 
-    box-shadow: 0 8px 30px rgba(27, 94, 32, 0.2);
-}
-
-.ui-card-title {
-    font-size: 2rem;
-    font-weight: 900;
-    color: var(--color-text-dark);
-    border-left: 5px solid var(--color-secondary);
-    padding-left: 1.5rem;
-    font-family: 'Montserrat', sans-serif !important;
-    margin-bottom: 1.5rem;
-}
-
-/* --- Buttons --- */
-
+/* Buttons */
 .stButton>button {
-    background: linear-gradient(135deg, var(--color-secondary) 0%, var(--color-tertiary) 100%);
-    color: #FFFFFF !important;
-    border: none !important;
-    border-radius: 12px;
-    font-weight: 900;
-    padding: 1.2rem 3rem;
-    box-shadow: 0 4px 15px rgba(76, 175, 80, 0.3);
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    font-size: 1rem;
-    position: relative;
-    overflow: hidden;
-}
-
-.stButton>button::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -75%;
-    width: 50%;
-    height: 100%;
-    background: rgba(255, 255, 255, 0.2);
-    transform: skewX(-20deg);
-    transition: left 0.4s ease-in-out;
-}
-
-.stButton>button:hover::after {
-    left: 150%;
+    background: linear-gradient(135deg, var(--primary-green), var(--secondary-green));
+    color: var(--text-dark) !important; /* dark green text */
+    border-radius: var(--border-radius);
+    font-weight: 700;
+    padding: 0.8rem 2rem;
+    box-shadow: var(--shadow-card);
+    transition: all var(--transition);
 }
 
 .stButton>button:hover {
-    background: linear-gradient(135deg, var(--color-tertiary) 0%, var(--color-secondary) 100%);
-    transform: translateY(-3px) scale(1.05);
-    box-shadow: 0 6px 25px rgba(76, 175, 80, 0.4);
+    transform: scale(1.05);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+    color: var(--text-medium) !important;
 }
 
-
-.cal-highlight {
-    background: linear-gradient(135deg, #FFFFFF 0%, #F1F8E9 100%);
-    border-radius: 20px;
-    box-shadow: var(--shadow-card);
-    border: 3px solid var(--color-secondary);
-    padding: 3rem;
-    position: relative;
-    overflow: hidden;
+/* Inputs */
+.stTextInput>div>input, 
+.stNumberInput>div>input, 
+.stSelectbox>div>input {
+    border-radius: var(--border-radius);
+    border: 2px solid var(--secondary-green);
+    padding: 0.6rem 1rem;
+    color: var(--text-dark);
+    background-color: #FFFFFF;
+    transition: all var(--transition);
 }
 
-.cal-highlight::after {
-    content: '';
-    position: absolute;
-    top: -50%;
-    right: -50%;
-    width: 200%;
-    height: 200%;
-    background: radial-gradient(circle, rgba(139, 195, 74, 0.1) 0%, transparent 70%);
-    animation: rotateGlow 8s linear infinite;
+.stTextInput>div>input:focus, 
+.stNumberInput>div>input:focus, 
+.stSelectbox>div>input:focus {
+    border-color: var(--primary-green);
+    box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.15);
+    color: var(--text-dark);
 }
 
+/* Metrics / Cards Highlight */
 .cal-value {
-    font-size: 6.5rem;
+    font-size: 3rem;
     font-weight: 900;
-    color: var(--color-text-dark) !important;
-    text-shadow: 2px 2px 4px rgba(139, 195, 74, 0.3);
-    position: relative;
-    z-index: 1;
+    color: var(--primary-green);
 }
 
 .cal-unit {
-    font-size: 2.5rem;
-    font-weight: 800;
-    color: var(--color-text-medium) !important;
-    position: relative;
-    z-index: 1;
-}
-
-/* --- Chips/Tags --- */
-
-.chip {
-    background: linear-gradient(145deg, #A5D6A7, #8BC34A);
-    color: #fff;
-    padding: 0.8rem 1.4rem;
-    border-radius: 25px;
+    font-size: 1.5rem;
     font-weight: 700;
-    border: none;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 4px 10px rgba(76, 175, 80, 0.3);
-    transition: all 0.3s ease;
-    text-transform: uppercase;
-    font-size: 0.9rem;
-    letter-spacing: 1px;
+    color: var(--text-medium);
 }
 
-.chip:hover {
-    background: linear-gradient(145deg, #8BC34A, #4CAF50);
-    transform: scale(1.05);
-    box-shadow: 0 6px 15px rgba(76, 175, 80, 0.4);
-}
-.chip-sugg {
-    background: linear-gradient(135deg, var(--color-secondary) 0%, var(--color-tertiary) 100%);
-    color: #55d05b !important;
-    border: none;
-    box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
-}
-
-/* --- Animations --- */
-@keyframes fadeInSlideUp {
-    0% { opacity: 0; transform: translateY(40px); }
+/* Animations */
+@keyframes fadeIn {
+    0% { opacity: 0; transform: translateY(20px); }
     100% { opacity: 1; transform: translateY(0); }
 }
 
-@keyframes pulseTitle {
-    0% { 
-        text-shadow: 2px 2px 4px rgba(255, 255, 255, 0.5);
-    }
-    100% { 
-        text-shadow: 2px 2px 8px rgba(255, 255, 255, 0.8);
-    }
+.stCard, .ui-card {
+    animation: fadeIn 0.6s ease forwards;
 }
 
-@keyframes rotateGlow {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
+/* Links */
+a, a:hover {
+    color: var(--primary-green);
+    text-decoration: none;
 }
 
-/* --- Additional Text Contrast Fixes --- */
-
-.stMarkdown, .stText, p, span, div {
-    color: var(--color-text-dark) !important;
+[data-testid="stMetricLabel"],
+[data-testid="stMetricValue"],
+[data-testid="stMetricDelta"],
+.stText, 
+.stMarkdown p, 
+.stMarkdown span {
+    color: var(--text-dark) !important; 
 }
-
-/* Ensure all metric labels are visible */
-.metric-label, .stMetric label {
-    color: var(--color-text-medium) !important;
-    font-weight: 600;
-}
-
-/* Metric values */
-.stMetric [data-testid="stMetricValue"] {
-    color: var(--color-text-dark) !important;
-    font-weight: 900;
-}
-
-/* Stars and icons */
-.star, .icon {
-    color: var(--color-accent-yellow) !important;
-}
-
-/* Additional dropdown styling for better visibility */
-[data-baseweb="popover"] {
-    background-color: #FFFFFF !important;
-}
-
-[data-baseweb="menu"] {
-    background-color: #FFFFFF !important;
-}
-
-[data-baseweb="menu"] li {
-    color: var(--color-text-dark) !important;
-}
-
-[data-baseweb="menu"] li:hover {
-    background-color: var(--color-accent-light) !important;
-}
-
-/* Final Button Re-style with Shimmer effect */
-.stButton>button {
-    background: linear-gradient(135deg, var(--color-secondary), var(--color-tertiary));
-    color: #FFFFFF !important;
-    border: none;
-    border-radius: 12px;
-    font-weight: 900;
-    padding: 1.2rem 3rem;
-    box-shadow: 0 4px 15px rgba(76, 175, 80, 0.3);
-    transition: all 0.3s ease;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    font-size: 1rem;
-    position: relative;
-    overflow: hidden;
-}
-
-.stButton>button::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -75%;
-    width: 50%;
-    height: 100%;
-    background: rgba(255, 255, 255, 0.2);
-    transform: skewX(-20deg);
-    transition: left 0.4s ease-in-out;
-}
-
-.stButton>button:hover::after {
-    left: 150%;
-}
-
-.stButton>button:hover {
-    transform: translateY(-3px) scale(1.05);
-    box-shadow: 0 6px 25px rgba(76, 175, 80, 0.4);
-}
-
-
-
