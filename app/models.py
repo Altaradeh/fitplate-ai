@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 class FoodItemBase(BaseModel):
     """Base model for food items."""
     name: str = Field(..., min_length=1, description="Name of the food item")
-    type: Literal["main_dish", "side_dish", "beverage", "condiment"] = Field(..., description="Type of food item")
+    type: Literal["main_dish", "side_dish", "beverage", "condiment", "unknown"] = Field(..., description="Type of food item")
 
     @field_validator('name')
     def validate_name(cls, v: str) -> str:

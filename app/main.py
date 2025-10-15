@@ -55,9 +55,9 @@ async def verify_openai_access(client: AsyncOpenAI) -> Tuple[bool, Optional[str]
     
     return False, "No response received from OpenAI API"
 
-async def process_image(image, analyzer: FoodAnalyzerService):
+async def process_image(image, analyzer: FoodAnalyzerService, user_preferences: Dict[str, Any]):
     try:
-        analysis_result = await analyzer.analyze_meal(image)
+        analysis_result = await analyzer.analyze_meal(image, user_preferences)
         if not analysis_result or analysis_result.get("status") == "error":
             error_msg = analysis_result.get("error", "Unknown error") if analysis_result else "No result"
             logger.error(f"Analysis failed: {error_msg}")
@@ -69,12 +69,23 @@ async def process_image(image, analyzer: FoodAnalyzerService):
         components = analysis_result.get("components", [])
         dish_name = meal_info.get("name", "Unknown Dish")
         confidence = meal_info.get("confidence", 0.0)
+        
+        # Check for non-food items
+        if dish_name in ["Non-Food Item Detected", "Unidentified Food"] or confidence == 0.0:
+            logger.warning("Non-food item detected in uploaded image")
+            return {
+                "dish_name": "Non-Food Item",
+                "confidence": 0.0,
+                "is_non_food": True
+            }, analysis_result
+            
         if dish_name == "Unknown Dish" and components:
             dish_name = components[0].get("name", "Unknown Dish")
         logger.info(f"Successfully analyzed: {dish_name} (confidence: {confidence:.2f})")
         return {
             "dish_name": dish_name,
-            "confidence": confidence
+            "confidence": confidence,
+            "is_non_food": False
         }, analysis_result
     except Exception as e:
         logger.error(f"Error processing image: {str(e)}")
@@ -83,14 +94,14 @@ async def process_image(image, analyzer: FoodAnalyzerService):
             "confidence": 0.0
         }, None
 
-async def handle_chat(analyzer: FoodAnalyzerService, question: str, analysis_result: Dict[str, Any]):
+async def handle_chat(analyzer: FoodAnalyzerService, question: str, analysis_result: Dict[str, Any], user_preferences: Dict[str, Any]):
     import time
     from datetime import datetime
     try:
         _ts = datetime.utcnow().isoformat()
         _start = time.perf_counter()
         logger.info(f"[Chat][START] ts={_ts} question_len={len(question)}")
-        stream = await analyzer.answer_question(question, analysis_result)
+        stream = await analyzer.answer_question(question, analysis_result, user_preferences)
         token_count = 0
         async for chunk in stream:
             token_count += 1
@@ -103,6 +114,68 @@ async def handle_chat(analyzer: FoodAnalyzerService, question: str, analysis_res
         _dur_ms = int((time.perf_counter() - _start) * 1000) if '_start' in locals() else 0
         logger.error(f"[Chat][ERROR] dur_ms={_dur_ms} error={str(e)}")
         yield f"Sorry, I encountered an error: {str(e)}"
+
+def generate_chat_suggestions(user_preferences: Dict[str, Any]) -> List[str]:
+    """Generate personalized chat suggestions based on user preferences"""
+    suggestions = []
+    
+    goal = user_preferences.get('goal', 'Balanced')
+    diet = user_preferences.get('diet', 'None')
+    health_conditions = user_preferences.get('health_conditions', [])
+    calorie_target = user_preferences.get('calorie_target', 2500)
+    
+    # Goal-adapted questions
+    if goal == 'Bulking':
+        suggestions.extend([
+            "Does this meal provide enough protein for bulking?",
+            "How can I add more calories to support my bulking goals?"
+        ])
+    elif goal == 'Cutting':
+        suggestions.extend([
+            "How can I reduce calories while keeping this meal satisfying?",
+            f"Is this meal appropriate for my daily calorie target of {calorie_target} kcal?"
+        ])
+    elif goal == 'Maintenance':
+        suggestions.extend([
+            "Does this meal provide enough protein for maintenance?",
+            f"Is this meal appropriate for my daily calorie target of {calorie_target} kcal?"
+        ])
+    else:  # Balanced
+        suggestions.extend([
+            "Is this a well-balanced meal for my goals?",
+            "Can I add more vegetables or fiber to improve this meal?"
+        ])
+    
+    # Diet-adapted questions
+    if diet != 'None':
+        suggestions.append(f"Is this meal suitable for a {diet} diet?")
+        if diet in ['Keto', 'Vegan', 'Vegetarian', 'Mediterranean']:
+            suggestions.append(f"Which ingredients should I replace to make this meal compliant with a {diet} diet?")
+    
+    # Health condition-adapted questions
+    if health_conditions:
+        # Handle multiple conditions - pick the most relevant ones
+        primary_condition = health_conditions[0]
+        suggestions.append(f"Is this meal suitable for someone with {primary_condition}?")
+        
+        # Add specific allergen questions based on selected conditions
+        if 'Celiac Disease' in health_conditions:
+            suggestions.append("Does this meal contain gluten?")
+        elif 'Lactose Intolerance' in health_conditions:
+            suggestions.append("Does this meal contain lactose?")
+        elif len(health_conditions) > 1:
+            # If multiple conditions but no specific allergen ones, ask about all conditions
+            conditions_str = ", ".join(health_conditions[:2])  # Limit to first 2 for readability
+            suggestions.append(f"Is this meal safe for my health conditions ({conditions_str})?")
+    
+    # Always include some general options
+    suggestions.extend([
+        "Which ingredients should I reduce or replace to make this meal healthier?",
+        "What are the main nutritional benefits of this meal?"
+    ])
+    
+    # Return max 3 suggestions to fit the UI nicely
+    return suggestions[:3]
 
 def load_styles():
     st.markdown(
@@ -218,7 +291,7 @@ def theme_toggle():
 
 def init_preferences():
     if 'prefs' not in st.session_state:
-        st.session_state.prefs = {'goal': 'balanced', 'diet': 'none', 'calorie_target': None}
+        st.session_state.prefs = {'goal': 'Balanced', 'diet': 'None', 'health_conditions': [], 'calorie_target': 2500}
     st.markdown(
         """
         <script>
@@ -244,20 +317,21 @@ def init_preferences():
 def preferences_sidebar():
     with st.sidebar:
         st.markdown("### 🎯 Preferences")
-        goal = st.selectbox("Goal", ["balanced", "bulking", "cutting", "maintenance"], index=["balanced","bulking","cutting","maintenance"].index(st.session_state.prefs.get('goal','balanced')))
-        diet = st.selectbox("Diet", ["none", "keto", "vegan", "vegetarian", "mediterranean"], index=["none","keto","vegan","vegetarian","mediterranean"].index(st.session_state.prefs.get('diet','none')))
-        cal = st.text_input("Daily calorie target (optional)", value=str(st.session_state.prefs.get('calorie_target') or ''))
+        goal = st.selectbox("Goal", ["Balanced", "Bulking", "Cutting", "Maintenance"], index=["Balanced","Bulking","Cutting","Maintenance"].index(st.session_state.prefs.get('goal','Balanced')))
+        diet = st.selectbox("Diet", ["None", "Keto", "Vegan", "Vegetarian", "Mediterranean"], index=["None","Keto","Vegan","Vegetarian","Mediterranean"].index(st.session_state.prefs.get('diet','None')))
+        health_conditions = st.multiselect("Health Conditions", ["Diabetes", "Heart disease", "High blood pressure", "High cholesterol", "Celiac Disease", "Lactose Intolerance"], default=st.session_state.prefs.get('health_conditions', []))
+        cal = st.text_input("Daily calorie target", value=str(st.session_state.prefs.get('calorie_target') or '2500'))
         cal_val = None
         try:
             cal_val = int(cal) if cal.strip() else None
         except Exception:
             pass
-        st.session_state.prefs.update({'goal': goal, 'diet': diet, 'calorie_target': cal_val})
+        st.session_state.prefs.update({'goal': goal, 'diet': diet, 'health_conditions': health_conditions, 'calorie_target': cal_val})
         st.markdown(
             f"""
             <script>
             try {{
-              const prefs = {json.dumps({'goal': goal, 'diet': diet, 'calorie_target': cal_val})};
+              const prefs = {json.dumps({'goal': goal, 'diet': diet, 'health_conditions': health_conditions, 'calorie_target': cal_val})};
               window.localStorage.setItem('fitplate-prefs', JSON.stringify(prefs));
             }} catch(e) {{}}
             </script>
@@ -344,7 +418,7 @@ def main():
     if 'last_camera_ts' not in st.session_state:
         st.session_state.last_camera_ts = 0.0
     with tab_upload:
-        uploaded_file = st.file_uploader("", type=["jpg", "jpeg", "png"])
+        uploaded_file = st.file_uploader("Upload Food Image", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
         if uploaded_file is not None:
             up_bytes = uploaded_file.getvalue()
             up_hash = __import__('hashlib').md5(up_bytes).hexdigest()
@@ -415,7 +489,7 @@ def main():
             else:
                 with st.spinner("Analyzing your dish..."):
                     loop = asyncio.get_event_loop()
-                    dish, nutrition = loop.run_until_complete(process_image(image, analyzer))
+                    dish, nutrition = loop.run_until_complete(process_image(image, analyzer, st.session_state.prefs))
             loading_placeholder.empty()
             
             # Get AI suggestions (API) or use demo suggestions
@@ -423,7 +497,7 @@ def main():
                 suggestions = suggestions if 'suggestions' in locals() else []
             else:
                 with st.spinner("Getting personalized suggestions..."):
-                    suggestions = loop.run_until_complete(analyzer.suggest_improvements(nutrition))
+                    suggestions = loop.run_until_complete(analyzer.suggest_improvements(nutrition, st.session_state.prefs))
             
             # Cache the results including suggestions
             st.session_state.analysis_cache[image_hash] = {
@@ -431,6 +505,21 @@ def main():
                 'nutrition': nutrition,
                 'suggestions': suggestions
             }
+        
+        # Check if this is a non-food item
+        if dish.get('is_non_food', False) or dish['dish_name'] == "Non-Food Item":
+            st.warning("🚫 **Non-Food Item Detected**")
+            st.markdown("""
+            It looks like the uploaded image doesn't contain food items. 
+            
+            **Please try uploading an image that contains:**
+            - A meal or dish
+            - Individual food items
+            - Snacks or beverages
+            
+            For best results, ensure the food is clearly visible and well-lit.
+            """)
+            return
         
         # Always render the UI (using cached or fresh data)
         if not nutrition or not nutrition.get("nutrition_summary"):
@@ -637,7 +726,10 @@ def main():
         if nutrition and not demo_mode:
             st.markdown('<hr/>', unsafe_allow_html=True)
             st.markdown('<div class="subsection-header">Ask about your meal</div>', unsafe_allow_html=True)
-            chat_suggestions = ["Is this good for bulking?", "How to reduce calories?", "Is this balanced for dinner?"]
+            
+            # Generate personalized chat suggestions
+            chat_suggestions = generate_chat_suggestions(st.session_state.prefs)
+            
             cols = st.columns(len(chat_suggestions))
             preset = None
             for i, (col, s) in enumerate(zip(cols, chat_suggestions)):
@@ -654,7 +746,7 @@ def main():
                     st.write(user_question)
                 with st.chat_message("assistant", avatar="🍽️"):
                     async def stream_answer():
-                        async for token in handle_chat(analyzer, user_question, nutrition):
+                        async for token in handle_chat(analyzer, user_question, nutrition, st.session_state.prefs):
                             yield token
                     st.write_stream(stream_answer())
         elif nutrition and demo_mode:

@@ -58,14 +58,14 @@ class FoodAnalyzerService:
             t = t.replace("json", "").strip()
         return t
 
-    async def analyze_meal(self, image: Image.Image) -> Dict[str, Any]:
+    async def analyze_meal(self, image: Image.Image, user_preferences: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         try:
             scene_analysis = await self._analyze_image(image)
             if not scene_analysis or not scene_analysis.items:
                 return {"status": "error", "error": "No food detected"}
 
             nutrition_task = asyncio.create_task(self._analyze_nutrition(scene_analysis.items))
-            recommendations_task = asyncio.create_task(self._get_recommendations(None))
+            recommendations_task = asyncio.create_task(self._get_recommendations(None, user_preferences))
             nutrition, recommendations = await asyncio.gather(nutrition_task, recommendations_task)
 
             if not nutrition:
@@ -284,6 +284,14 @@ class FoodAnalyzerService:
             raw = self._clean_ai_response(content)
             parsed = VisionAnalysisResponse.model_validate_json(raw, strict=True)
             result = DishAnalysis(items=parsed.items)
+            
+            # Check if any items are of type 'unknown' and handle accordingly
+            has_unknown = any(item.type == "unknown" for item in result.items)
+            if has_unknown:
+                logger.warning("Non-food or unknown items detected in image")
+                # Return a clear indication that this is not a food item
+                return DishAnalysis(items=[VisionFoodItem(name="Non-Food Item Detected", type="unknown", quantity="N/A", confidence=0.0)])
+            
             self._vision_cache[cache_key] = result
 
             logger.info(
@@ -292,10 +300,37 @@ class FoodAnalyzerService:
             return result
         except Exception as e:
             logger.error("Error in _analyze_image: %s", e, exc_info=True)
-            return DishAnalysis(items=[VisionFoodItem(name="Unidentified Food", type="main_dish", quantity="1 serving", confidence=0.0)])
+            return DishAnalysis(items=[VisionFoodItem(name="Unidentified Food", type="unknown", quantity="N/A", confidence=0.0)])
 
     async def _analyze_nutrition(self, items: List[FoodItem]) -> NutritionAnalysis:
         try:
+            # Check if we have any unknown food types (non-food items)
+            if any(item.type == "unknown" for item in items):
+                logger.info("Skipping nutrition analysis for unknown/non-food items")
+                # Return empty nutrition data for non-food items
+                empty_nutrition_info = NutritionInfo(
+                    calories=0,
+                    serving_size="N/A",
+                    protein_g=0.0,
+                    carbs_g=0.0,
+                    fiber_g=0.0,
+                    sugar_g=0.0,
+                    fat_g=0.0,
+                    saturated_fat_g=0.0,
+                    category="N/A",
+                    diet_tags=[],
+                    warnings=["This appears to be a non-food item"]
+                )
+                empty_food_item = FoodItemWithNutrition(
+                    name="Non-Food Item",
+                    type="unknown",
+                    nutrition=empty_nutrition_info
+                )
+                return NutritionAnalysis(
+                    combined=empty_nutrition_info,
+                    items=[empty_food_item]
+                )
+
             # 1. Build normalized payload
             payload = [
                 {
@@ -407,7 +442,7 @@ class FoodAnalyzerService:
             logger.error("Error in _analyze_nutrition: %s", e, exc_info=True)
             return None
 
-    async def _get_recommendations(self, nutrition: Optional[Any]) -> Dict[str, Any]:
+    async def _get_recommendations(self, nutrition: Optional[Any], user_preferences: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Generate meal recommendations and qualitative feedback.
 
         Enhancements (method-local only):
@@ -455,7 +490,23 @@ class FoodAnalyzerService:
             if cache_key in self._rec_cache:
                 return self._rec_cache[cache_key]
 
-            # 3. Rules & JSON contract (concise)
+            # 3. Build user context from preferences
+            user_context = ""
+            if user_preferences:
+                goal = user_preferences.get('goal', 'Balanced')
+                diet = user_preferences.get('diet', 'None')
+                health_conditions = user_preferences.get('health_conditions', [])
+                calorie_target = user_preferences.get('calorie_target', 2500)
+                
+                user_context = f"\nUser Profile:\n"
+                user_context += f"- Goal: {goal}\n"
+                user_context += f"- Diet: {diet}\n"
+                if health_conditions:
+                    user_context += f"- Health Conditions: {', '.join(health_conditions)}\n"
+                user_context += f"- Daily Calorie Target: {calorie_target}\n"
+                user_context += "Tailor recommendations to this profile.\n"
+
+            # 4. Rules & JSON contract (concise)
             contract = (
                 "Required JSON keys: recommendations[list(str)], health_score[int 0-100], meal_type[str one of "
                 "breakfast|lunch|dinner|snack|unknown], dietary_considerations[list(str)], meal_rating[int 0-10], "
@@ -476,6 +527,7 @@ class FoodAnalyzerService:
 
             prompt = (
                 f"Macro summary: {meal_summary}\n" +
+                user_context +
                 contract + "\n" + rules + examples +
                 "Return ONLY strict JSON with all required keys." 
             )
@@ -544,16 +596,16 @@ class FoodAnalyzerService:
                 "positive_aspects": [],
             }
 
-    async def suggest_improvements(self, nutrition: NutritionAnalysis) -> List[str]:
+    async def suggest_improvements(self, nutrition: NutritionAnalysis, user_preferences: Optional[Dict[str, Any]] = None) -> List[str]:
         """Public helper to get quick improvement suggestions."""
         try:
-            rec = await self._get_recommendations(nutrition)
+            rec = await self._get_recommendations(nutrition, user_preferences)
             return rec.get("improvements", []) or rec.get("recommendations", [])
         except Exception as e:
             logger.error(f"Error in suggest_improvements: {e}")
             return ["No improvements available."]
 
-    async def answer_question(self, question: str, meal_data: Dict[str, Any]):
+    async def answer_question(self, question: str, meal_data: Dict[str, Any], user_preferences: Optional[Dict[str, Any]] = None):
         """Answer user questions about the analyzed meal with a structured streaming response.
 
         Enhancements:
@@ -599,8 +651,22 @@ class FoodAnalyzerService:
                 "6. Keep DETAILS under ~12 sentences total.\n"
             )
 
+            # Build user context from preferences
+            user_context = ""
+            if user_preferences:
+                goal = user_preferences.get('goal', 'Balanced')
+                diet = user_preferences.get('diet', 'None')
+                health_conditions = user_preferences.get('health_conditions', [])
+                calorie_target = user_preferences.get('calorie_target', 2500)
+                
+                user_context = f"\nUser Profile: Goal={goal}, Diet={diet}"
+                if health_conditions:
+                    user_context += f", Health Conditions={', '.join(health_conditions)}"
+                user_context += f", Daily Target={calorie_target} kcal. Consider this context."
+
             user_msg = (
-                f"Meal: {meal_name}. Nutrition summary: {nutrition_text}.\n"
+                f"Meal: {meal_name}. Nutrition summary: {nutrition_text}." +
+                user_context + f"\n"
                 f"Question: {question}"
             )
 
