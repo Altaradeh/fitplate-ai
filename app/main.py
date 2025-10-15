@@ -35,6 +35,34 @@ client: Optional[AsyncOpenAI] = None
 
 from app.config import VISION_MODEL, CHAT_MODEL
 
+# Load icons from JSON file
+def load_icons() -> Dict[str, str]:
+    """Load icons from the icons.json file."""
+    try:
+        icons_path = os.path.join(os.path.dirname(__file__), 'icons.json')
+        with open(icons_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data.get('icons', {})
+    except Exception as e:
+        logger.warning(f"Could not load icons.json: {e}")
+        return {}
+
+# Global icons dictionary
+ICONS = load_icons()
+
+def get_icon(key: str, default: str = "🍴") -> str:
+    """Get an icon for a given key, with fallback to default."""
+    # Try exact match first
+    if key.lower() in ICONS:
+        return ICONS[key.lower()]
+    
+    # Try partial matches for compound terms
+    for icon_key, icon_value in ICONS.items():
+        if key.lower() in icon_key or icon_key in key.lower():
+            return icon_value
+    
+    return default
+
 async def verify_openai_access(client: AsyncOpenAI) -> Tuple[bool, Optional[str]]:
     try:
         response = await client.chat.completions.create(
@@ -530,7 +558,7 @@ def main():
         nutrition_summary = nutrition["nutrition_summary"]
         meal_info = nutrition.get("meal_info", {})
         confidence = dish['confidence'] * 100
-        confidence_emoji = "🎯" if confidence >= 90 else "✨" if confidence >= 70 else "👀"
+        confidence_emoji = get_icon("confidence_high") if confidence >= 90 else get_icon("confidence_medium") if confidence >= 70 else get_icon("confidence_low")
         diet_tags = nutrition_summary.get("diet_tags", [])
 
         # Show left column (meal info) and right column (image)
@@ -578,7 +606,7 @@ def main():
                 cal_dv = nutrition_summary["calories"]["daily_value"]
                 serving_size = meal_info.get("serving_size", "N/A")
                 title_html = f"<div class='meal-title-row'><div class='meal-title'>{confidence_emoji} {dish['dish_name']}</div><span class='meal-badge'>{confidence:.1f}%</span></div>"
-                meta_html = f"<div class='meal-meta'>🔥 {cal_val} kcal • {cal_dv}% DV · 📏 Serving: {serving_size}</div>"
+                meta_html = f"<div class='meal-meta'>{get_icon('high calories')} {cal_val} kcal • {cal_dv}% DV · 📏 Serving: {serving_size}</div>"
                 tags_html = ""
                 if diet_tags:
                     tags_html = "<div class='diet-chips'>" + " ".join([f"<span class='diet-chip'>🏷️ {tag}</span>" for tag in diet_tags]) + "</div>"
@@ -597,30 +625,28 @@ def main():
                 """
                 st.markdown(meal_card_html, unsafe_allow_html=True)
 
-                # Icon helpers based on common nutrition keywords
+                # Icon helpers using centralized icon system
                 def _warn_icon(txt: str) -> str:
+                    """Get warning icon based on text content using icons.json"""
                     t = txt.lower()
-                    if "sodium" in t or "salt" in t: return "🧂"
-                    if "sugar" in t: return "🍬"
-                    if "fat" in t and "saturated" in t: return "🧈"
-                    if "fat" in t: return "🥓"
-                    if "calorie" in t: return "🔥"
-                    if "fiber" in t: return "🌾"
-                    if "protein" in t: return "🥩"
-                    if "carb" in t: return "🍞"
-                    return "⚠️"
+                    # Try to find the most specific match first
+                    for keyword in ["saturated fat", "trans fat", "high sodium", "added sugar", "high calories", 
+                                   "sodium", "salt", "sugar", "fat", "calorie", "fiber", "protein", "carb"]:
+                        if keyword in t:
+                            return get_icon(keyword, "⚠️")
+                    return get_icon("allergen", "⚠️")
 
                 def _sugg_icon(txt: str) -> str:
+                    """Get suggestion icon based on text content using icons.json"""
                     t = txt.lower()
-                    if "vegetable" in t or "veggie" in t or "broccoli" in t or "salad" in t: return "🥦"
-                    if "fruit" in t: return "🍎"
-                    if "protein" in t or "chicken" in t: return "🥩"
-                    if "fiber" in t or "whole" in t or "quinoa" in t: return "🌾"
-                    if "fat" in t and ("olive" in t or "avocado" in t): return "🫒"
-                    if "sugar" in t: return "🍬"
-                    if "water" in t or "hydrate" in t: return "💧"
-                    if "calorie" in t or "reduce" in t: return "⚡"
-                    return "💡"
+                    # Try to find the most specific match first
+                    for keyword in ["add vegetables", "add fruits", "steamed vegetables", "grilled chicken", 
+                                   "salmon steak", "avocado toast", "whole grain", "olive oil", "healthy fat",
+                                   "vegetable", "veggie", "broccoli", "salad", "fruit", "protein", "chicken", 
+                                   "fiber", "quinoa", "avocado", "water", "hydrate", "reduce calories"]:
+                        if keyword in t:
+                            return get_icon(keyword, "💡")
+                    return get_icon("balanced", "💡")
 
                 # Show AI Suggestions and Warnings below the Dish info
                 if suggestions:
@@ -629,7 +655,7 @@ def main():
                         for s in suggestions
                     ]
                     st.markdown(
-                        f"<div class='ui-card'><div class='ui-card-title'>💡 AI Suggestions</div><div class='chips'>{''.join(sugg_chips)}</div></div>",
+                        f"<div class='ui-card'><div class='ui-card-title'>{get_icon('ai_suggestions')} AI Suggestions</div><div class='chips'>{''.join(sugg_chips)}</div></div>",
                         unsafe_allow_html=True,
                     )
 
@@ -640,7 +666,7 @@ def main():
                         for w in warn_list
                     ]
                     st.markdown(
-                        f"<div class='ui-card'><div class='ui-card-title'>⚠️ Warnings</div><div class='chips'>{''.join(warn_chips)}</div></div>",
+                        f"<div class='ui-card'><div class='ui-card-title'>{get_icon('warnings')} Warnings</div><div class='chips'>{''.join(warn_chips)}</div></div>",
                         unsafe_allow_html=True,
                     )
 
@@ -674,23 +700,23 @@ def main():
                 sugar = additional.get("sugar", {})
                 sat = additional.get("saturated_fat", {})
                 add_chips = [
-                    f"<span class='chip'><span class='ico'>🌾</span>Fiber: {fiber.get('value', 0):.1f}g • {fiber.get('daily_value', 0)}% DV</span>",
-                    f"<span class='chip'><span class='ico'>🍯</span>Sugar: {sugar.get('value', 0):.1f}g</span>",
-                    f"<span class='chip'><span class='ico'>🥑</span>Saturated Fat: {sat.get('value', 0):.1f}g • {sat.get('daily_value', 0)}% DV</span>",
+                    f"<span class='chip'><span class='ico'>{get_icon('fiber')}</span>Fiber: {fiber.get('value', 0):.1f}g • {fiber.get('daily_value', 0)}% DV</span>",
+                    f"<span class='chip'><span class='ico'>{get_icon('sugar')}</span>Sugar: {sugar.get('value', 0):.1f}g</span>",
+                    f"<span class='chip'><span class='ico'>{get_icon('saturated fat')}</span>Saturated Fat: {sat.get('value', 0):.1f}g • {sat.get('daily_value', 0)}% DV</span>",
                 ]
                 st.markdown(
-                    f"<div class='ui-card eq'><div class='ui-card-title'>➕ Additional Nutrients</div><div class='chips'>{''.join(add_chips)}</div></div>",
+                    f"<div class='ui-card eq'><div class='ui-card-title'>{get_icon('additional_nutrients')} Additional Nutrients</div><div class='chips'>{''.join(add_chips)}</div></div>",
                     unsafe_allow_html=True,
                 )
             with col_right:
                 macros = nutrition_summary["macros"]
                 macro_html = f"""
                     <div class='ui-card eq'>
-                        <div class='ui-card-title'>📊 Macronutrients</div>
+                        <div class='ui-card-title'>{get_icon('nutrition')} Macronutrients</div>
                         <div class='chips'>
-                          <span class='chip'><span class='ico'>🥩</span>Protein: {macros['protein']['value']:.1f}g • {macros['protein']['daily_value']}% DV</span>
-                          <span class='chip'><span class='ico'>🍚</span>Carbs: {macros['carbs']['value']:.1f}g • {macros['carbs']['daily_value']}% DV</span>
-                          <span class='chip'><span class='ico'>🫒</span>Fat: {macros['fat']['value']:.1f}g • {macros['fat']['daily_value']}% DV</span>
+                          <span class='chip'><span class='ico'>{get_icon('protein')}</span>Protein: {macros['protein']['value']:.1f}g • {macros['protein']['daily_value']}% DV</span>
+                          <span class='chip'><span class='ico'>{get_icon('carb')}</span>Carbs: {macros['carbs']['value']:.1f}g • {macros['carbs']['daily_value']}% DV</span>
+                          <span class='chip'><span class='ico'>{get_icon('healthy fat')}</span>Fat: {macros['fat']['value']:.1f}g • {macros['fat']['daily_value']}% DV</span>
                         </div>
                     </div>
                 """
@@ -700,11 +726,11 @@ def main():
         # Macronutrients are shown next to Additional Nutrients above to align with the image column
         components = nutrition.get("components", [])
         if components:
-            with st.expander("🍱 Meal Components", expanded=False):
+            with st.expander(f"{get_icon('meal_components')} Meal Components", expanded=False):
                 for item in components:
                     st.markdown('<div class="card">', unsafe_allow_html=True)
-                    type_icons = {"main_dish":"🍽️","side_dish":"🥗","beverage":"🥤","condiment":"🧂"}
-                    icon = type_icons.get(item['type'], "🍴")
+                    # Use centralized icon system for component types
+                    icon = get_icon(item['type'], get_icon('unknown'))
                     st.markdown(f"### {icon} {item['name']}")
                     st.caption(f"Type: {item['type'].replace('_', ' ').title()} | {item['serving']}")
                     c1, c2, c3 = st.columns(3)
