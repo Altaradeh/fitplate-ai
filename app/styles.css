@@ -1,145 +1,620 @@
-:root {
+/* UI Card styles */
+.ui-card {
+    background: linear-gradient(135deg, rgba(232, 245, 233, 0.95) 0%, rgba(240, 255, 240, 0.95) 100%) !important;
+    border-radius: var(--border-radius-lg) !important;
+    padding: 2rem !important;
+    margin-bottom: 2rem !important;
+    box-shadow: var(--shadow-card) !important;
+    border: 2px solid rgba(76, 175, 80, 0.2) !important;
+    transition: all var(--transition) !important;
+    color: var(--text-dark) !important;
+    position: relative !important;
+    overflow: hidden !important;
+}
+
+.ui-card::before {
+    content: '' !important;
+    position: absolute !important;
+    top: 0 !important;
+    left: -100% !important;
+    width: 100% !important;
+    height: 100% !important;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent) !important;
+    transition: left 0.6s ease !important;
+    pointer-events: none !important;
+}
+
+.ui-card:hover::before {
+    left: 100% !important;
+}
+
+.ui-card:hover {
+    transform: translateY(-8px) scale(1.01) !important;
+    box-shadow: var(--shadow-hover) !important;
+    border-color: var(--secondary-green) !important;
+    background: linear-gradient(135deg, rgba(212, 237, 218, 0.98) 0%, rgba(200, 230, 201, 0.98) 100%) !important;
+}
+
+/* UI Card Title */
+.ui-card-title {
+    font-size: 1.2rem !important;
+    font-weight: 900 !important;
+    color: var(--text-dark) !important;
+    margin-bottom: 1.2rem !important;
+    letter-spacing: -0.3px !important;
+    transition: all var(--transition-fast) !important;
+}
+
+/* Chips container */
+.chips {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 0.8rem !important;
+}
+
+/* Individual chip */
+.chip {
+    background: linear-gradient(135deg, rgba(76, 175, 80, 0.15) 0%, rgba(102, 187, 106, 0.1) 100%) !important;
+    color: var(--text-dark) !important;
+    border: 2px solid var(--secondary-green) !important;
+    padding: 0.7rem 1.1rem !important;
+    border-radius: 18px !important;
+    font-weight: 600 !important;
+    font-size: 0.9rem !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 0.5rem !important;
+    transition: all var(--transition-fast) !important;
+    cursor: default !important;
+}
+
+.chip:hover {
+    background: linear-gradient(135deg, rgba(76, 175, 80, 0.25) 0%, rgba(102, 187, 106, 0.2) 100%) !important;
+    border-color: var(--primary-green) !important;
+    transform: translateY(-2px) !important;
+    box-shadow: 0 6px 16px rgba(76, 175, 80, 0.2) !important;
+}
+
+/* Icon in chip */
+.ico {
+    font-size: 1.1rem !important;
+    display: inline-flex !important;
+    align-items: center !important;
+}
+
+/* Target Additional Nutrients section (first .ui-card.eq) - darker background */
+.ui-card.eq:first-of-type {
+    background: linear-gradient(135deg, var(--dark-green) 0%, #1B5E20 100%) !important;
+    border: 2px solid var(--secondary-green) !important;
+    box-shadow: 0 12px 40px rgba(45, 95, 57, 0.3) !important;
+}
+
+.ui-card.eq:first-of-type:hover {
+    background: linear-gradient(135deg, #1B5E20 0%, var(--dark-green) 100%) !important;
+    box-shadow: 0 18px 50px rgba(45, 95, 57, 0.45) !important;
+    border-color: var(--secondary-green) !important;
+    transform: translateY(-10px) scale(1.02) !important;
+}
+
+.ui-card.eq:first-of-type .ui-card-title {
+    color: #ffffff !important;
+}
+
+.ui-card.eq:first-of-type .chip {
+    background: rgba(255, 255, 255, 0.15) !important;
+    color: #ffffff !important;
+    border: 1px solid rgba(255, 255, 255, 0.3) !important;
+}
+
+.ui-card.eq:first-of-type .chip:hover {
+    background: rgba(255, 255, 255, 0.25) !important;
+    border-color: rgba(255, 255, 255, 0.5) !important;
+    transform: translateY(-2px) !important;
+}
+
+/* Dark UI Card for Additional Nutrients section */
+.ui-card.dark-section {
+    background: linear-gradient(135deg, var(--dark-green) 0%, #1B5E20 100%) !important;
+    border: 2px solid var(--secondary-green) !important;
+    box-shadow: 0 12px 40px rgba(45, 95, 57, 0.3) !important;
+}
+
+.ui-card.dark-section:hover {
+    background: linear-gradient(135deg, #1B5E20 0%, var(--dark-green) 100%) !important;
+    box-shadow: 0 18px 50px rgba(45, 95, 57, 0.45) !important;
+    border-color: var(--secondary-green) !important;
+    transform: translateY(-10px) scale(1.02) !important;
+}
+
+.ui-card.dark-section .ui-card-title {
+    color: #ffffff !important;
+}
+
+.ui-card.dark-section .chip {
+    background: rgba(255, 255, 255, 0.15) !important;
+    color: #ffffff !important;
+    border: 1px solid rgba(255, 255, 255, 0.3) !important;
+}
+
+.ui-card.dark-section .chip:hover {
+    background: rgba(255, 255, 255, 0.25) !important;
+    border-color: rgba(255, 255, 255, 0.5) !important;
+}
+
+/* UI Card Title */
+.ui-card-title {
+    font-size: 1.2rem !important;
+    font-weight: 900 !important;
+    color: var(--text-dark) !important;
+    margin-bottom: 1.2rem !important;
+    letter-spacing: -0.3px !important;
+    transition: all var(--transition-fast) !important;
+}
+
+/* Chips container */
+.chips {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 0.8rem !important;
+}
+
+/* Individual chip */
+.chip {
+    background: linear-gradient(135deg, rgba(76, 175, 80, 0.15) 0%, rgba(102, 187, 106, 0.1) 100%) !important;
+    color: var(--text-dark) !important;
+    border: 2px solid var(--secondary-green) !important;
+    padding: 0.7rem 1.1rem !important;
+    border-radius: 18px !important;
+    font-weight: 600 !important;
+    font-size: 0.9rem !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 0.5rem !important;
+    transition: all var(--transition-fast) !important;
+    cursor: default !important;
+}
+
+.chip:hover {
+    background: linear-gradient(135deg, rgba(76, 175, 80, 0.25) 0%, rgba(102, 187, 106, 0.2) 100%) !important;
+    border-color: var(--primary-green) !important;
+    transform: translateY(-2px) !important;
+    box-shadow: 0 6px 16px rgba(76, 175, 80, 0.2) !important;
+}
+
+/* Icon in chip */
+.ico {
+    font-size: 1.1rem !important;
+    display: inline-flex !important;
+    align-items: center !important;
+}/* Chips/Tags - Darker green with hover effects */
+[class*="stTag"],
+[class*="stBadge"],
+[class*="stChip"],
+.streamlit-badge {
+    background: var(--dark-green) !important;
+    color: #ffffff !important;
+    border-radius: 20px !important;
+    padding: 0.6rem 1.2rem !important;
+    font-weight: 700 !important;
+    font-size: 0.85rem !important;
+    letter-spacing: 0.3px !important;
+    transition: all var(--transition) !important;
+    box-shadow: 0 4px 12px rgba(45, 95, 57, 0.25) !important;
+    border: 2px solid transparent !important;
+    cursor: pointer !important;
+}
+
+[class*="stTag"]:hover,
+[class*="stBadge"]:hover,
+[class*="stChip"]:hover,
+.streamlit-badge:hover {
+    background: linear-gradient(135deg, var(--dark-green) 0%, #1B5E20 100%) !important;
+    transform: translateY(-3px) scale(1.05) !important;
+    box-shadow: 0 8px 24px rgba(45, 95, 57, 0.4) !important;
+    border-color: var(--secondary-green) !important;
+}
+
+/* Inline chip label for tags section */
+.tag-label-chip {
+    background: linear-gradient(135deg, var(--dark-green) 0%, #1B5E20 100%) !important;
+    color: #ffffff !important;
+    padding: 0.6rem 1.2rem !important;
+    border-radius: 20px !important;
+    font-weight: 800 !important;
+    font-size: 0.85rem !important;
+    letter-spacing: 0.3px !important;
+    display: inline-block !important;
+    margin-right: 1rem !important;
+    margin-bottom: 0.5rem !important;
+    box-shadow: 0 4px 12px rgba(45, 95, 57, 0.3) !important;
+    transition: all var(--transition) !important;
+    cursor: default !important;
+    text-transform: uppercase !important;
+}:root {
     --primary-green: #4CAF50;
-    --secondary-green: #66BB6A; /* slightly brighter for contrast */
+    --secondary-green: #66BB6A;
     --accent-green: #C8E6C9;
+    --dark-green: #2D5F39;
     --light-bg: #F5FFFA;
-    --card-bg: #E8F5E9; /* light green card background for contrast */
-    --text-dark: #1B5E20; /* darkest green for main text */
-    --text-medium: #2E7D32; /* medium green for highlights */
-    --text-light: #388E3C; /* lighter green for secondary text */
+    --card-bg: #E8F5E9;
+    --text-dark: #1B5E20;
+    --text-medium: #2E7D32;
+    --text-light: #388E3C;
     --shadow-soft: 0 4px 15px rgba(0, 0, 0, 0.05);
     --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.08);
-    --border-radius: 16px;
-    --transition: 0.3s ease-in-out;
+    --shadow-elevated: 0 20px 60px rgba(76, 175, 80, 0.15);
+    --shadow-hover: 0 25px 70px rgba(76, 175, 80, 0.25);
+    --border-radius: 20px;
+    --border-radius-lg: 24px;
+    --transition: 0.35s cubic-bezier(0.4, 0.0, 0.2, 1);
+    --transition-fast: 0.2s cubic-bezier(0.4, 0.0, 0.2, 1);
 }
 
 /* Body */
 body, .stApp {
-    background: var(--light-bg) !important;
-    font-family: 'Inter', 'Montserrat', sans-serif !important;
+    background: linear-gradient(135deg, #F5FFFA 0%, #E8F5E9 50%, #F0FFF0 100%) !important;
+    font-family: 'Inter', 'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
     color: var(--text-dark) !important;
-    transition: all var(--transition);
+    min-height: 100vh !important;
+}
+
+/* Animated background orbs */
+body::before {
+    content: '' !important;
+    position: fixed !important;
+    top: -50% !important;
+    right: -10% !important;
+    width: 500px !important;
+    height: 500px !important;
+    background: radial-gradient(circle, rgba(102, 187, 106, 0.12), transparent) !important;
+    border-radius: 50% !important;
+    animation: float 8s ease-in-out infinite !important;
+    pointer-events: none !important;
+    z-index: 0 !important;
+}
+
+body::after {
+    content: '' !important;
+    position: fixed !important;
+    bottom: -20% !important;
+    left: 5% !important;
+    width: 400px !important;
+    height: 400px !important;
+    background: radial-gradient(circle, rgba(76, 175, 80, 0.1), transparent) !important;
+    border-radius: 50% !important;
+    animation: float 10s ease-in-out infinite reverse !important;
+    pointer-events: none !important;
+    z-index: 0 !important;
+}
+
+@keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(30px); }
 }
 
 /* Top Bar */
 .topbar {
-    background: var(--card-bg) !important;
-    border-bottom: 2px solid var(--secondary-green);
-    padding: 1rem 2rem;
-    box-shadow: var(--shadow-soft);
-    border-radius: var(--border-radius) var(--border-radius) 0 0;
-    color: var(--text-dark);
+    background: linear-gradient(90deg, rgba(232, 245, 233, 0.98) 0%, rgba(200, 230, 201, 0.98) 50%, rgba(240, 255, 240, 0.98) 100%) !important;
+    border-bottom: 3px solid var(--secondary-green) !important;
+    padding: 1.2rem 2.5rem !important;
+    box-shadow: var(--shadow-elevated) !important;
+    border-radius: var(--border-radius-lg) var(--border-radius-lg) 0 0 !important;
+    color: var(--text-dark) !important;
 }
 
 /* Sidebar */
 [data-testid="stSidebar"] {
-    background: var(--accent-green) !important;
-    border-right: 2px solid var(--secondary-green);
-    padding: 2rem;
-    border-radius: 0 var(--border-radius) var(--border-radius) 0;
-    box-shadow: var(--shadow-soft);
-    color: var(--text-dark);
+    background: linear-gradient(180deg, rgba(200, 230, 201, 0.95) 0%, rgba(212, 237, 218, 0.95) 100%) !important;
+    border-right: 3px solid var(--secondary-green) !important;
+    padding: 2rem !important;
+    border-radius: 0 var(--border-radius-lg) var(--border-radius-lg) 0 !important;
+    box-shadow: var(--shadow-elevated) !important;
+    transition: all var(--transition) !important;
+}
+
+[data-testid="stSidebar"]:hover {
+    box-shadow: var(--shadow-hover) !important;
 }
 
 [data-testid="stSidebar"] h2, 
 [data-testid="stSidebar"] label {
     color: var(--text-dark) !important;
-    font-weight: 700;
+    font-weight: 800 !important;
+    letter-spacing: -0.3px !important;
+}
+
+[data-testid="stSidebar"] h2:hover {
+    color: var(--primary-green) !important;
 }
 
 /* Cards */
 .stCard, .ui-card {
-    background: var(--card-bg);
-    border-radius: var(--border-radius);
-    padding: 2rem;
-    margin-bottom: 2rem;
-    box-shadow: var(--shadow-card);
-    transition: transform var(--transition), box-shadow var(--transition);
-    color: var(--text-dark);
+    background: linear-gradient(135deg, rgba(232, 245, 233, 0.95) 0%, rgba(240, 255, 240, 0.95) 100%) !important;
+    border-radius: var(--border-radius-lg) !important;
+    padding: 2rem !important;
+    margin-bottom: 2rem !important;
+    box-shadow: var(--shadow-card) !important;
+    border: 2px solid rgba(76, 175, 80, 0.2) !important;
+    transition: all var(--transition) !important;
+    color: var(--text-dark) !important;
+    position: relative !important;
+    overflow: hidden !important;
+}
+
+.stCard::before, .ui-card::before {
+    content: '' !important;
+    position: absolute !important;
+    top: 0 !important;
+    left: -100% !important;
+    width: 100% !important;
+    height: 100% !important;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent) !important;
+    transition: left 0.6s ease !important;
+    pointer-events: none !important;
+}
+
+.stCard:hover::before, .ui-card:hover::before {
+    left: 100% !important;
 }
 
 .stCard:hover, .ui-card:hover {
-    transform: translateY(-5px);
-    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.12);
+    transform: translateY(-8px) scale(1.01) !important;
+    box-shadow: var(--shadow-hover) !important;
+    border-color: var(--secondary-green) !important;
+    background: linear-gradient(135deg, rgba(212, 237, 218, 0.98) 0%, rgba(200, 230, 201, 0.98) 100%) !important;
 }
 
 /* Titles */
 h1, h2, h3, h4 {
-    color: var(--text-dark);
-    font-weight: 800;
+    color: var(--text-dark) !important;
+    font-weight: 900 !important;
+    letter-spacing: -0.5px !important;
+    transition: all var(--transition-fast) !important;
+}
+
+h1:hover, h2:hover, h3:hover, h4:hover {
+    color: var(--primary-green) !important;
 }
 
 /* Buttons */
-.stButton>button {
-    background: linear-gradient(135deg, var(--primary-green), var(--secondary-green));
-    color: var(--text-dark) !important; /* dark green text */
-    border-radius: var(--border-radius);
-    font-weight: 700;
-    padding: 0.8rem 2rem;
-    box-shadow: var(--shadow-card);
-    transition: all var(--transition);
+.stButton > button {
+    background: linear-gradient(135deg, var(--primary-green) 0%, var(--secondary-green) 100%) !important;
+    color: #ffffff !important;
+    border-radius: var(--border-radius) !important;
+    font-weight: 700 !important;
+    padding: 0.85rem 2rem !important;
+    box-shadow: 0 8px 24px rgba(76, 175, 80, 0.3) !important;
+    transition: all var(--transition) !important;
+    border: none !important;
+    letter-spacing: 0.3px !important;
+    position: relative !important;
+    overflow: hidden !important;
 }
 
-.stButton>button:hover {
-    transform: scale(1.05);
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
-    color: var(--text-medium) !important;
+.stButton > button:hover {
+    transform: translateY(-4px) scale(1.08) !important;
+    box-shadow: 0 16px 40px rgba(76, 175, 80, 0.45) !important;
+    background: linear-gradient(135deg, #66BB6A 0%, #4CAF50 100%) !important;
+}
+
+.stButton > button:active {
+    transform: translateY(-1px) scale(1.05) !important;
 }
 
 /* Inputs */
-.stTextInput>div>input, 
-.stNumberInput>div>input, 
-.stSelectbox>div>input {
-    border-radius: var(--border-radius);
-    border: 2px solid var(--secondary-green);
-    padding: 0.6rem 1rem;
-    color: var(--text-dark);
-    background-color: #FFFFFF;
-    transition: all var(--transition);
+.stTextInput > div > input,
+.stNumberInput > div > input,
+.stSelectbox > div > input,
+.stTextArea > div > textarea {
+    border-radius: var(--border-radius) !important;
+    border: 2.5px solid var(--secondary-green) !important;
+    padding: 0.85rem 1.2rem !important;
+    color: var(--text-dark) !important;
+    background: linear-gradient(135deg, #FFFFFF 0%, #F9FFFB 100%) !important;
+    transition: all var(--transition) !important;
+    font-size: 0.95rem !important;
+    font-weight: 500 !important;
+    box-shadow: 0 4px 12px rgba(76, 175, 80, 0.08) !important;
 }
 
-.stTextInput>div>input:focus, 
-.stNumberInput>div>input:focus, 
-.stSelectbox>div>input:focus {
-    border-color: var(--primary-green);
-    box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.15);
-    color: var(--text-dark);
+.stTextInput > div > input:focus,
+.stNumberInput > div > input:focus,
+.stSelectbox > div > input:focus,
+.stTextArea > div > textarea:focus {
+    border-color: var(--primary-green) !important;
+    box-shadow: 0 0 0 5px rgba(76, 175, 80, 0.25), 0 8px 24px rgba(76, 175, 80, 0.2) !important;
+    color: var(--text-dark) !important;
+    transform: scale(1.02) !important;
+    background: linear-gradient(135deg, #FFFFFF 0%, #F0FFF0 100%) !important;
 }
 
-/* Metrics / Cards Highlight */
-.cal-value {
-    font-size: 3rem;
-    font-weight: 900;
-    color: var(--primary-green);
+.stTextInput > div > input:hover,
+.stNumberInput > div > input:hover,
+.stSelectbox > div > input:hover,
+.stTextArea > div > textarea:hover {
+    border-color: var(--secondary-green) !important;
+    box-shadow: 0 6px 18px rgba(76, 175, 80, 0.15) !important;
+    transform: translateY(-2px) !important;
 }
 
-.cal-unit {
-    font-size: 1.5rem;
-    font-weight: 700;
-    color: var(--text-medium);
+/* Metrics / Cards Highlight - No background, cleaner look */
+.stMetric {
+    background: transparent !important;
+    border-radius: var(--border-radius) !important;
+    padding: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+    transition: all var(--transition) !important;
 }
 
-/* Animations */
-@keyframes fadeIn {
-    0% { opacity: 0; transform: translateY(20px); }
-    100% { opacity: 1; transform: translateY(0); }
+.stMetric:hover {
+    transform: none !important;
+    box-shadow: none !important;
+    border-color: transparent !important;
 }
 
-.stCard, .ui-card {
-    animation: fadeIn 0.6s ease forwards;
+[data-testid="stMetricValue"] {
+    font-size: 2.5rem !important;
+    font-weight: 900 !important;
+    color: var(--primary-green) !important;
+    transition: all var(--transition-fast) !important;
+    animation: pulseNumber 2s ease-in-out infinite !important;
+}
+
+@keyframes pulseNumber {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+}
+
+[data-testid="stMetricValue"]:hover {
+    animation: none !important;
+}
+
+[data-testid="stMetricLabel"] {
+    font-size: 1.1rem !important;
+    font-weight: 700 !important;
+    color: var(--text-medium) !important;
+    letter-spacing: 0.3px !important;
 }
 
 /* Links */
-a, a:hover {
-    color: var(--primary-green);
-    text-decoration: none;
+a {
+    color: var(--primary-green) !important;
+    text-decoration: none !important;
+    transition: all var(--transition-fast) !important;
+    font-weight: 600 !important;
 }
 
-[data-testid="stMetricLabel"],
-[data-testid="stMetricValue"],
+a:hover {
+    color: var(--secondary-green) !important;
+    transform: translateY(-2px) !important;
+    text-decoration: underline !important;
+}
+
+/* Text Elements */
 [data-testid="stMetricDelta"],
-.stText, 
-.stMarkdown p, 
+.stText,
+.stMarkdown p,
 .stMarkdown span {
-    color: var(--text-dark) !important; 
+    color: var(--text-dark) !important;
+}
+
+/* === Chat Section Polish === */
+
+.stChatMessage {
+    border-radius: 18px !important;
+    padding: 1.3rem 1.5rem !important;
+    margin: 0.8rem 0 !important;
+    transition: all var(--transition) !important;
+    animation: fadeIn 0.5s ease-out !important;
+}
+
+@keyframes fadeIn {
+    0% { opacity: 0; transform: translateY(15px); }
+    100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideInLeft {
+    0% { opacity: 0; transform: translateX(-20px); }
+    100% { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes slideInRight {
+    0% { opacity: 0; transform: translateX(20px); }
+    100% { opacity: 1; transform: translateX(0); }
+}
+
+/* User messages */
+.stChatMessage[data-testid="stChatMessageUserContent"],
+.stChatMessage.user {
+    background: linear-gradient(135deg, var(--primary-green) 0%, var(--secondary-green) 100%) !important;
+    color: #ffffff !important;
+    box-shadow: 0 12px 35px rgba(76, 175, 80, 0.35) !important;
+    border: 2px solid rgba(255, 255, 255, 0.25) !important;
+    margin-left: 5rem !important;
+    margin-right: 0 !important;
+    animation: slideInRight 0.5s ease-out !important;
+    transition: all var(--transition) !important;
+}
+
+.stChatMessage[data-testid="stChatMessageUserContent"]:hover,
+.stChatMessage.user:hover {
+    transform: translateX(-5px) translateY(-4px) scale(1.01) !important;
+    box-shadow: 0 18px 50px rgba(76, 175, 80, 0.45) !important;
+    border-color: rgba(255, 255, 255, 0.4) !important;
+}
+
+/* Assistant (AI) messages */
+.stChatMessage[data-testid="stChatMessageAvatarContent"],
+.stChatMessage.assistant {
+    background: linear-gradient(135deg, #FFFFFF 0%, #F9FFFB 100%) !important;
+    color: var(--text-dark) !important;
+    border: 3px solid var(--accent-green) !important;
+    box-shadow: 0 8px 28px rgba(76, 175, 80, 0.15) !important;
+    margin-right: 5rem !important;
+    margin-left: 0 !important;
+    animation: slideInLeft 0.5s ease-out !important;
+    transition: all var(--transition) !important;
+}
+
+.stChatMessage[data-testid="stChatMessageAvatarContent"]:hover,
+.stChatMessage.assistant:hover {
+    transform: translateX(5px) translateY(-4px) scale(1.01) !important;
+    box-shadow: 0 16px 45px rgba(76, 175, 80, 0.25) !important;
+    border-color: var(--secondary-green) !important;
+    background: linear-gradient(135deg, #FFFFFF 0%, #F0FFF0 100%) !important;
+}
+
+/* Chat text */
+.stChatMessage p {
+    margin: 0 !important;
+    line-height: 1.6 !important;
+    font-size: 0.95rem !important;
+    font-weight: 500 !important;
+}
+
+/* Input box */
+.stChatInputContainer {
+    margin-top: 1.5rem !important;
+    border: 3px solid var(--secondary-green) !important;
+    border-radius: 16px !important;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(249, 255, 251, 0.95) 100%) !important;
+    box-shadow: 0 8px 28px rgba(76, 175, 80, 0.12) !important;
+    transition: all var(--transition) !important;
+    padding: 1rem !important;
+}
+
+.stChatInputContainer:hover {
+    border-color: var(--primary-green) !important;
+    box-shadow: 0 12px 40px rgba(76, 175, 80, 0.2) !important;
+    transform: translateY(-2px) !important;
+}
+
+.stChatInputContainer:focus-within {
+    border-color: var(--primary-green) !important;
+    box-shadow: 0 0 0 6px rgba(76, 175, 80, 0.3), 0 16px 50px rgba(76, 175, 80, 0.25) !important;
+    transform: scale(1.02) translateY(-4px) !important;
+    background: linear-gradient(135deg, #FFFFFF 0%, #F0FFF0 100%) !important;
+}
+
+/* Send button in chat */
+.stChatInputContainer .stButton > button {
+    background: linear-gradient(135deg, var(--primary-green) 0%, var(--secondary-green) 100%) !important;
+    color: #ffffff !important;
+    font-weight: 700 !important;
+    border: none !important;
+    border-radius: 12px !important;
+    padding: 0.8rem 1.5rem !important;
+    transition: all var(--transition) !important;
+    box-shadow: 0 8px 24px rgba(76, 175, 80, 0.3) !important;
+    letter-spacing: 0.3px !important;
+}
+
+.stChatInputContainer .stButton > button:hover {
+    transform: translateY(-4px) scale(1.08) !important;
+    box-shadow: 0 16px 45px rgba(76, 175, 80, 0.45) !important;
+}
+
+.stChatInputContainer .stButton > button:active {
+    transform: translateY(-1px) scale(1.05) !important;
 }
