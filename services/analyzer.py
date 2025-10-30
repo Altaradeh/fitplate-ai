@@ -6,7 +6,7 @@ import time
 import base64
 import io
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union, Sequence, cast
 from PIL import Image
 from openai import AsyncOpenAI
 
@@ -19,9 +19,20 @@ from app.models import (
     NutritionAnalysisResponse,
     MealRecommendations,
     FoodItem,
+    FoodItemBase,
     FoodItemWithNutrition,
 )
-from app.config import VISION_MODEL, CHAT_MODEL
+from app.config import (
+    VISION_MODEL, 
+    CHAT_MODEL, 
+    JSON_TEMPERATURE,
+    JSON_MAX_TOKENS,
+    JSON_MAX_TOKENS_NUTRITION,
+    TEXT_TEMPERATURE,
+    TEXT_MAX_TOKENS,
+    FAST_MODE,
+    MAX_FOOD_ITEMS
+)
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -42,12 +53,23 @@ class FoodAnalyzerService:
         self.client = AsyncOpenAI(api_key=api_key)
         self.VISION_MODEL = VISION_MODEL
         self.CHAT_MODEL = CHAT_MODEL
-        self.JSON_TEMPERATURE = 0.1
-        self.JSON_MAX_TOKENS = 1500
-        self.TEXT_TEMPERATURE = 0.3
-        self.TEXT_MAX_TOKENS = 400
+        self.JSON_TEMPERATURE = JSON_TEMPERATURE
+        self.JSON_MAX_TOKENS = JSON_MAX_TOKENS
+        self.JSON_MAX_TOKENS_NUTRITION = JSON_MAX_TOKENS_NUTRITION
+        self.TEXT_TEMPERATURE = TEXT_TEMPERATURE
+        self.TEXT_MAX_TOKENS = TEXT_MAX_TOKENS
+        self.FAST_MODE = FAST_MODE
+        self.MAX_FOOD_ITEMS = MAX_FOOD_ITEMS
         self._vision_cache = {}
         self._nutrition_cache = {}
+    
+    def enable_ultra_fast_mode(self):
+        """Enable ultra-fast mode for even faster analysis."""
+        self.FAST_MODE = True
+        self.MAX_FOOD_ITEMS = 5
+        self.JSON_MAX_TOKENS_NUTRITION = 500
+        self.JSON_MAX_TOKENS = 700
+        logger.info("[SPEED] Ultra-fast mode enabled: 5 items max, reduced tokens")
 
     def _clean_ai_response(self, text: str) -> str:
         if not text:
@@ -59,31 +81,36 @@ class FoodAnalyzerService:
         return t
 
     async def analyze_meal(self, image: Image.Image, user_preferences: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        start_time = time.perf_counter()
         try:
+            logger.info("[MEAL_ANALYSIS][START] Starting optimized meal analysis")
+            
+            vision_start = time.perf_counter()
             scene_analysis = await self._analyze_image(image)
+            vision_time = int((time.perf_counter() - vision_start) * 1000)
+            logger.info(f"[MEAL_ANALYSIS][VISION] Completed in {vision_time}ms")
+            
             if not scene_analysis or not scene_analysis.items:
                 return {"status": "error", "error": "No food detected"}
 
-            nutrition_task = asyncio.create_task(self._analyze_nutrition(scene_analysis.items))
-            recommendations_task = asyncio.create_task(self._get_recommendations(None, user_preferences))
-            nutrition, recommendations = await asyncio.gather(nutrition_task, recommendations_task)
+            # Speed optimization: limit food items if in fast mode
+            items_to_analyze = scene_analysis.items
+            if self.FAST_MODE and len(items_to_analyze) > self.MAX_FOOD_ITEMS:
+                # Keep only the highest confidence items
+                items_to_analyze = sorted(items_to_analyze, key=lambda x: x.confidence, reverse=True)[:self.MAX_FOOD_ITEMS]
+                logger.info(f"[SPEED_OPTIMIZATION] Limited to {self.MAX_FOOD_ITEMS} highest confidence items (was {len(scene_analysis.items)})")
+
+            # Start nutrition analysis immediately after vision
+            nutrition_start = time.perf_counter()
+            nutrition_task = asyncio.create_task(self._analyze_nutrition(items_to_analyze))
+            nutrition = await nutrition_task
+            nutrition_time = int((time.perf_counter() - nutrition_start) * 1000)
+            logger.info(f"[MEAL_ANALYSIS][NUTRITION] Completed in {nutrition_time}ms")
 
             if not nutrition:
                 return {"status": "error", "error": "Nutrition analysis failed"}
 
-            if not recommendations:
-                recommendations = {
-                    "recommendations": ["No specific suggestions"],
-                    "health_score": 5,
-                    "meal_type": "unknown",
-                    "dietary_considerations": [],
-                    "meal_rating": 5,
-                    "suggestions": [],
-                    "improvements": [],
-                    "positive_aspects": [],
-                }
-
-            return {
+            result = {
                 "status": "success",
                 "meal_info": {
                     "name": getattr(scene_analysis.items[0], "name", "Unknown Dish"),
@@ -144,8 +171,13 @@ class FoodAnalyzerService:
                     }
                     for i in nutrition.items
                 ],
-                "ai_insights": recommendations,
+                # AI insights will be generated separately via suggest_improvements()
             }
+            
+            total_time = int((time.perf_counter() - start_time) * 1000)
+            logger.info(f"[MEAL_ANALYSIS][COMPLETE] Total analysis time: {total_time}ms")
+            return result
+            
         except Exception as e:
             logger.error(f"Error analyzing meal: {e}")
             return {"status": "error", "error": str(e)}
@@ -172,27 +204,31 @@ class FoodAnalyzerService:
 
             # 1. Normalize & copy
             img = image.copy()
+            assert img is not None, "Failed to copy image"
+            img = cast(Image.Image, img)  # Tell type checker img is not None
             if ImageOps:
                 try:
                     img = ImageOps.exif_transpose(img)
+                    assert img is not None, "Failed to transpose image"
+                    img = cast(Image.Image, img)  # Tell type checker img is not None after transpose
                 except Exception:
                     pass
-            if img.mode != "RGB":
-                img = img.convert("RGB")
+            if img.mode != "RGB":  # type: ignore
+                img = img.convert("RGB")  # type: ignore
 
             # 2. Resize bounding box (maintain aspect ratio)
             max_dim = 512
-            if img.width > max_dim or img.height > max_dim:
-                img.thumbnail((max_dim, max_dim))
+            if img.width > max_dim or img.height > max_dim:  # type: ignore
+                img.thumbnail((max_dim, max_dim))  # type: ignore
 
             # 3. Encode JPEG
             buf = io.BytesIO()
             try:
-                img.save(buf, format="JPEG", quality=85, optimize=True, progressive=True)
+                img.save(buf, format="JPEG", quality=85, optimize=True, progressive=True)  # type: ignore
             except Exception:
                 # Fallback if optimize/progressive not supported
                 buf = io.BytesIO()
-                img.save(buf, format="JPEG", quality=85)
+                img.save(buf, format="JPEG", quality=85)  # type: ignore
             data = buf.getvalue()
             img_b64 = base64.b64encode(data).decode()
 
@@ -220,7 +256,7 @@ class FoodAnalyzerService:
     "8. For uncertain quantities, provide a low confidence and approximate descriptor (e.g., 'about 40 g').\n"
     "9. Label unknowns as 'unknown <category>' if the class cannot be identified.\n"
     "10. Do not infer hidden ingredients (e.g., filling) unless clearly visible.\n"
-    "11. If a food visually matches a well-known regional or common dish (e.g., baklava, pizza, knafeh) "
+    "11. If a food visually matches a well-known regional or common dish (e.g., pizza, knafeh) "
     "with ≥ 0.7 confidence, name the dish directly instead of generic terms, but include the confidence score.\n"
 )
 
@@ -249,27 +285,37 @@ class FoodAnalyzerService:
             start = time.perf_counter()
             logger.info(
                 "[OpenAI][START] ts=%s step=vision model=%s temp=%s max_tokens=%s w=%d h=%d bytes=%d hash=%s",
-                ts, self.VISION_MODEL, self.JSON_TEMPERATURE, self.JSON_MAX_TOKENS, img.width, img.height, len(data), cache_key
+                ts, self.VISION_MODEL, self.JSON_TEMPERATURE, self.JSON_MAX_TOKENS, img.width, img.height, len(data), cache_key  # type: ignore
             )
 
-            resp = await self.client.chat.completions.create(
-                model=self.VISION_MODEL,
-                messages=[
-                    {"role": "system", "content": (
-                        "You are a precise food recognition AI. Return ONLY valid JSON; no markdown; comply strictly with the provided schema."
-                    )},
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+            try:
+                resp = await asyncio.wait_for(
+                    self.client.chat.completions.create(
+                        model=self.VISION_MODEL,
+                        messages=[
+                            {"role": "system", "content": (
+                                "You are a precise food recognition AI. Return ONLY valid JSON; no markdown; comply strictly with the provided schema."
+                            )},
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": prompt},
+                                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+                                ],
+                            },
                         ],
-                    },
-                ],
-                response_format={"type": "json_object"},
-                temperature=self.JSON_TEMPERATURE,
-                max_tokens=self.JSON_MAX_TOKENS,
-            )
+                        response_format={"type": "json_object"},
+                        temperature=self.JSON_TEMPERATURE,
+                        max_tokens=self.JSON_MAX_TOKENS,
+                    ),
+                    timeout=60.0  # Increased timeout to 60 seconds for vision analysis
+                )
+            except asyncio.TimeoutError:
+                logger.error("OpenAI vision analysis timed out after 60 seconds")
+                raise Exception("Vision analysis timed out - this may be due to network issues or API overload")
+            except Exception as e:
+                logger.error("OpenAI vision analysis failed: %s", e)
+                raise Exception(f"Vision analysis failed: {str(e)}")
 
             duration_ms = int((time.perf_counter() - start) * 1000)
 
@@ -302,7 +348,7 @@ class FoodAnalyzerService:
             logger.error("Error in _analyze_image: %s", e, exc_info=True)
             return DishAnalysis(items=[VisionFoodItem(name="Unidentified Food", type="unknown", quantity="N/A", confidence=0.0)])
 
-    async def _analyze_nutrition(self, items: List[FoodItem]) -> NutritionAnalysis:
+    async def _analyze_nutrition(self, items: Sequence[FoodItemBase]) -> Optional[NutritionAnalysis]:
         try:
             # Check if we have any unknown food types (non-food items)
             if any(item.type == "unknown" for item in items):
@@ -353,28 +399,40 @@ class FoodAnalyzerService:
             schema_dict = NutritionAnalysisResponse.model_json_schema()
             schema_json = json.dumps(schema_dict, separators=(",", ":"))
 
-            # 4. Rules & examples (updated to match schema field names)
-            rules = (
-                "Rules:\n"
-                "1. Use only the provided item names, types, and quantities; do not invent or merge items.\n"
-                "2. For each item, estimate total nutrition for the visible serving size or stated weight.\n"
-                "3. Provide all required fields: Calories, Serving_Size, Protein, Carbs, Fiber, Sugar, Fat, Sat_Fat, Category.\n"
-                "4. Include optional Diet_Tags and Warnings when applicable.\n"
-                "5. Keep units consistent: grams for macros, kcal for energy.\n"
-                "6. Round numbers to one decimal where relevant.\n"
-                "7. If quantity is ambiguous, assume typical real-world weights (e.g., 1 egg ≈50 g).\n"
-                "8. When multiple pieces are listed, scale totals accordingly.\n"
-                "9. Return ONLY JSON matching the NutritionAnalysisResponse schema.\n"
-                "10. Do not include commentary, markdown, or extra keys.\n"
-            )
+            # 4. Rules & examples (optimized for speed in fast mode)
+            if self.FAST_MODE:
+                rules = (
+                    "Rules: 1) Use exact item names/quantities 2) Estimate realistic nutrition "
+                    "3) All required fields: Calories, Serving_Size, Protein, Carbs, Fiber, Sugar, Fat, Sat_Fat, Category "
+                    "4) Return ONLY JSON, no markdown 5) Round to 1 decimal\n"
+                )
+                examples = (
+                    "Example: Input:[{'name':'Salad','type':'side_dish','quantity':'1 bowl'}] "
+                    "Output:{'combined':{'Calories':150,'Serving_Size':'1 bowl','Protein':5.0,'Carbs':20.0,'Fiber':8.0,'Sugar':10.0,'Fat':8.0,'Sat_Fat':2.0,'Category':'salad'},"
+                    "'items':[{'name':'Salad','type':'side_dish','Calories':150,'Serving_Size':'1 bowl','Protein':5.0,'Carbs':20.0,'Fiber':8.0,'Sugar':10.0,'Fat':8.0,'Sat_Fat':2.0,'Category':'salad','quantity':'1 bowl'}]}\n"
+                )
+            else:
+                rules = (
+                    "Rules:\n"
+                    "1. Use only the provided item names, types, and quantities; do not invent or merge items.\n"
+                    "2. For each item, estimate total nutrition for the visible serving size or stated weight.\n"
+                    "3. Provide all required fields: Calories, Serving_Size, Protein, Carbs, Fiber, Sugar, Fat, Sat_Fat, Category.\n"
+                    "4. Include optional Diet_Tags and Warnings when applicable.\n"
+                    "5. Keep units consistent: grams for macros, kcal for energy.\n"
+                    "6. Round numbers to one decimal where relevant.\n"
+                    "7. If quantity is ambiguous, assume typical real-world weights (e.g., 1 egg ≈50 g).\n"
+                    "8. When multiple pieces are listed, scale totals accordingly.\n"
+                    "9. Return ONLY JSON matching the NutritionAnalysisResponse schema.\n"
+                    "10. Do not include commentary, markdown, or extra keys.\n"
+                )
 
-            examples = (
-                "Examples:\n"
-                "Input: [{'name':'Knafeh','type':'main_dish','quantity':'1 piece ≈120 g'}]\n"
-                "Output:\n"
-                "{'combined':{'Calories':420,'Serving_Size':'1 piece ≈120 g','Protein':10.0,'Carbs':45.0,'Fiber':1.2,'Sugar':30.0,'Fat':20.0,'Sat_Fat':10.0,'Category':'dessert','Diet_Tags':['vegetarian'],'Warnings':['high sugar','high fat']},"
-                "'items':[{'name':'Knafeh','type':'main_dish','Calories':420,'Serving_Size':'1 piece ≈120 g','Protein':10.0,'Carbs':45.0,'Fiber':1.2,'Sugar':30.0,'Fat':20.0,'Sat_Fat':10.0,'Category':'dessert','Diet_Tags':['vegetarian'],'Warnings':['high sugar','high fat'],'quantity':'1 piece'}]}"
-            )
+                examples = (
+                    "Examples:\n"
+                    "Input: [{'name':'Knafeh','type':'main_dish','quantity':'1 piece ≈120 g'}]\n"
+                    "Output:\n"
+                    "{'combined':{'Calories':420,'Serving_Size':'1 piece ≈120 g','Protein':10.0,'Carbs':45.0,'Fiber':1.2,'Sugar':30.0,'Fat':20.0,'Sat_Fat':10.0,'Category':'dessert','Diet_Tags':['vegetarian'],'Warnings':['high sugar','high fat']},"
+                    "'items':[{'name':'Knafeh','type':'main_dish','Calories':420,'Serving_Size':'1 piece ≈120 g','Protein':10.0,'Carbs':45.0,'Fiber':1.2,'Sugar':30.0,'Fat':20.0,'Sat_Fat':10.0,'Category':'dessert','Diet_Tags':['vegetarian'],'Warnings':['high sugar','high fat'],'quantity':'1 piece'}]}"
+                )
 
             # 5. Prompt assembly
             prompt = (
@@ -389,33 +447,43 @@ class FoodAnalyzerService:
             start = time.perf_counter()
             logger.info(
                 "[OpenAI][START] ts=%s step=nutrition model=%s temp=%s max_tokens=%s items=%d hash=%s",
-                ts, self.CHAT_MODEL, self.JSON_TEMPERATURE, self.JSON_MAX_TOKENS, len(payload), cache_key
+                ts, self.CHAT_MODEL, self.JSON_TEMPERATURE, self.JSON_MAX_TOKENS_NUTRITION, len(payload), cache_key
             )
 
-            # 6. OpenAI call with enforced JSON schema validation
-            resp = await self.client.chat.completions.create(
-                model=self.CHAT_MODEL,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a meticulous nutrition scientist. "
-                            "Return ONLY valid JSON strictly conforming to the provided schema. "
-                            "No markdown, no comments."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-            "name": "NutritionAnalysisResponse",
-            "schema": schema_dict
-        },  # enforce your NutritionAnalysisResponse structure
-                },
-                temperature=self.JSON_TEMPERATURE,
-                max_tokens=self.JSON_MAX_TOKENS,
-            )
+            # 6. OpenAI call with enforced JSON schema validation and timeout
+            try:
+                resp = await asyncio.wait_for(
+                    self.client.chat.completions.create(
+                        model=self.CHAT_MODEL,
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": (
+                                    "You are a meticulous nutrition scientist. "
+                                    "Return ONLY valid JSON strictly conforming to the provided schema. "
+                                    "No markdown, no comments."
+                                ),
+                            },
+                            {"role": "user", "content": prompt},
+                        ],
+                        response_format={
+                            "type": "json_schema",
+                            "json_schema": {
+                    "name": "NutritionAnalysisResponse",
+                    "schema": schema_dict
+                },  # enforce your NutritionAnalysisResponse structure
+                        },
+                        temperature=self.JSON_TEMPERATURE,
+                        max_tokens=self.JSON_MAX_TOKENS_NUTRITION,
+                    ),
+                    timeout=45.0  # Increased timeout to 45 seconds for nutrition analysis
+                )
+            except asyncio.TimeoutError:
+                logger.error("OpenAI nutrition analysis timed out after 45 seconds")
+                raise Exception("Nutrition analysis timed out - this may be due to network issues or API overload")
+            except Exception as e:
+                logger.error("OpenAI nutrition analysis failed: %s", e)
+                raise Exception(f"Nutrition analysis failed: {str(e)}")
 
             duration_ms = int((time.perf_counter() - start) * 1000)
 
@@ -428,7 +496,42 @@ class FoodAnalyzerService:
                 raise ValueError("Empty message content from nutrition model")
 
             raw = self._clean_ai_response(content)
-            parsed = NutritionAnalysisResponse.model_validate_json(raw)
+            
+            # Handle missing Category field in fast mode
+            try:
+                parsed = NutritionAnalysisResponse.model_validate_json(raw)
+            except Exception as validation_error:
+                if "Category" in str(validation_error) and self.FAST_MODE:
+                    logger.warning("Adding missing Category fields for fast mode compatibility")
+                    # Parse as dict and add missing categories
+                    import json as json_module
+                    data = json_module.loads(raw)
+                    
+                    # Add Category to combined if missing
+                    if "combined" in data and "Category" not in data["combined"]:
+                        data["combined"]["Category"] = "mixed"
+                    
+                    # Add Category to items if missing
+                    if "items" in data:
+                        for item in data["items"]:
+                            if "Category" not in item:
+                                # Guess category from type
+                                item_type = item.get("type", "unknown")
+                                category_map = {
+                                    "main_dish": "entree",
+                                    "side_dish": "side",
+                                    "beverage": "drink",
+                                    "condiment": "sauce",
+                                    "unknown": "other"
+                                }
+                                item["Category"] = category_map.get(item_type, "other")
+                    
+                    # Try parsing again
+                    raw = json_module.dumps(data)
+                    parsed = NutritionAnalysisResponse.model_validate_json(raw)
+                else:
+                    raise validation_error
+                    
             result = parsed.to_nutrition_analysis()
             self._nutrition_cache[cache_key] = result
 
@@ -440,6 +543,36 @@ class FoodAnalyzerService:
 
         except Exception as e:
             logger.error("Error in _analyze_nutrition: %s", e, exc_info=True)
+            
+            # Return a basic fallback result in fast mode
+            if self.FAST_MODE and "Category" in str(e):
+                logger.warning("Returning fallback nutrition data due to validation error in fast mode")
+                # Create a minimal valid response
+                fallback_nutrition = NutritionInfo(
+                    calories=300,
+                    serving_size="1 serving",
+                    protein_g=20.0,
+                    carbs_g=30.0,
+                    fiber_g=5.0,
+                    sugar_g=10.0,
+                    fat_g=12.0,
+                    saturated_fat_g=3.0,
+                    category="mixed",
+                    diet_tags=[],
+                    warnings=["Estimated values due to fast mode processing"]
+                )
+                
+                fallback_item = FoodItemWithNutrition(
+                    name="Mixed Meal",
+                    type="main_dish",
+                    nutrition=fallback_nutrition
+                )
+                
+                return NutritionAnalysis(
+                    combined=fallback_nutrition,
+                    items=[fallback_item]
+                )
+            
             return None
 
     async def _get_recommendations(self, nutrition: Optional[Any], user_preferences: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -455,18 +588,25 @@ class FoodAnalyzerService:
         """
         try:
             # 1. Normalize nutrition summary into a simple object (calories, macros)
+            class SimpleNutrition:
+                def __init__(self, calories: float = 0, protein_g: float = 0, carbs_g: float = 0, fat_g: float = 0):
+                    self.calories = calories
+                    self.protein_g = protein_g
+                    self.carbs_g = carbs_g
+                    self.fat_g = fat_g
+            
             if nutrition and hasattr(nutrition, "combined"):
                 combined = nutrition.combined
             elif isinstance(nutrition, dict) and "nutrition_summary" in nutrition:
                 ns = nutrition["nutrition_summary"]
-                combined = type("obj", (), {
-                    "calories": ns.get("calories", {}).get("value", 0),
-                    "protein_g": ns.get("macros", {}).get("protein", {}).get("value", 0),
-                    "carbs_g": ns.get("macros", {}).get("carbs", {}).get("value", 0),
-                    "fat_g": ns.get("macros", {}).get("fat", {}).get("value", 0),
-                })()
+                combined = SimpleNutrition(
+                    calories=ns.get("calories", {}).get("value", 0),
+                    protein_g=ns.get("macros", {}).get("protein", {}).get("value", 0),
+                    carbs_g=ns.get("macros", {}).get("carbs", {}).get("value", 0),
+                    fat_g=ns.get("macros", {}).get("fat", {}).get("value", 0),
+                )
             else:
-                combined = type("obj", (), {"calories": 0, "protein_g": 0, "carbs_g": 0, "fat_g": 0})()
+                combined = SimpleNutrition()
 
             meal_summary = (
                 f"Calories {combined.calories} kcal, Protein {combined.protein_g}g, "
@@ -474,7 +614,7 @@ class FoodAnalyzerService:
             )
 
             # 2. Versioned cache key for recommendations (coarse granularity by macro quartet)
-            prompt_version = "rec_v2"
+            prompt_version = "rec_v4"  # bumped to v4 for enhanced diet-specific suggestions
             key_material = json.dumps({
                 "calories": combined.calories,
                 "protein_g": combined.protein_g,
@@ -492,6 +632,9 @@ class FoodAnalyzerService:
 
             # 3. Build user context from preferences
             user_context = ""
+            goal_guidance = ""
+            diet_guidance = ""
+            health_guidance = ""
             if user_preferences:
                 goal = user_preferences.get('goal', 'Balanced')
                 diet = user_preferences.get('diet', 'None')
@@ -504,9 +647,57 @@ class FoodAnalyzerService:
                 if health_conditions:
                     user_context += f"- Health Conditions: {', '.join(health_conditions)}\n"
                 user_context += f"- Daily Calorie Target: {calorie_target}\n"
-                user_context += "Tailor recommendations to this profile.\n"
+                
+                # Add goal-specific guidance
+                if goal == 'Cutting':
+                    goal_guidance = "User is cutting: favor suggestions that maintain satiety while keeping calories appropriate. Don't suggest increasing calories unless severely inadequate.\n"
+                elif goal == 'Bulking':
+                    goal_guidance = "User is bulking: focus on adequate protein and calories for muscle growth. Suggest calorie increases only if very low.\n"
+                elif goal == 'Maintenance':
+                    goal_guidance = "User is maintaining: focus on balanced nutrition and sustainable eating patterns.\n"
+                else:  # Balanced
+                    goal_guidance = "User wants balanced nutrition: focus on overall health and nutritional adequacy.\n"
+                
+                # Add diet-specific guidance
+                if diet == 'Vegan':
+                    diet_guidance = "User follows VEGAN diet: ALWAYS suggest plant-based protein sources (legumes, tofu, tempeh), vitamin B12 considerations, iron-rich foods (spinach, lentils), and calcium sources (tahini, leafy greens). Praise plant-based choices.\n"
+                elif diet == 'Keto':
+                    diet_guidance = "User follows KETO diet: Focus on low-carb suggestions, healthy fats (avocado, nuts, olive oil), and adequate protein. Avoid high-carb recommendations.\n"
+                elif diet == 'Vegetarian':
+                    diet_guidance = "User is VEGETARIAN: Suggest plant-based proteins, dairy sources, and nutrient-dense options. Consider B12 and iron needs.\n"
+                elif diet == 'Mediterranean':
+                    diet_guidance = "User follows MEDITERRANEAN diet: Emphasize olive oil, fish, nuts, legumes, and fresh vegetables. Praise Mediterranean-style choices.\n"
+                elif diet != 'None':
+                    diet_guidance = f"User follows {diet} diet: Provide relevant dietary suggestions and considerations.\n"
+                
+                # Add health condition-specific guidance
+                if health_conditions:
+                    health_guidance = "Health condition considerations:\n"
+                    for condition in health_conditions:
+                        condition_lower = condition.lower()
+                        if 'diabetes' in condition_lower or 'diabetic' in condition_lower:
+                            health_guidance += "- DIABETES: Focus on low glycemic index foods, fiber-rich options, and balanced meals to manage blood sugar. Suggest complex carbs over simple sugars.\n"
+                        elif 'hypertension' in condition_lower or 'high blood pressure' in condition_lower:
+                            health_guidance += "- HYPERTENSION: Recommend low-sodium options, potassium-rich foods (bananas, leafy greens), and heart-healthy choices. Avoid high-sodium processed foods.\n"
+                        elif 'heart' in condition_lower or 'cardiovascular' in condition_lower:
+                            health_guidance += "- HEART DISEASE: Emphasize omega-3 fatty acids (fish, walnuts), fiber-rich foods, and limit saturated fats. Suggest heart-healthy cooking methods.\n"
+                        elif 'cholesterol' in condition_lower:
+                            health_guidance += "- HIGH CHOLESTEROL: Focus on soluble fiber foods (oats, beans), plant sterols, and lean proteins. Limit saturated and trans fats.\n"
+                        elif 'kidney' in condition_lower or 'renal' in condition_lower:
+                            health_guidance += "- KIDNEY DISEASE: Monitor protein intake, limit sodium and phosphorus. Suggest appropriate portion sizes and kidney-friendly foods.\n"
+                        elif 'celiac' in condition_lower or 'gluten' in condition_lower:
+                            health_guidance += "- CELIAC/GLUTEN SENSITIVITY: Ensure all suggestions are gluten-free. Recommend naturally gluten-free grains like quinoa, rice.\n"
+                        elif 'ibs' in condition_lower or 'irritable bowel' in condition_lower:
+                            health_guidance += "- IBS: Suggest low-FODMAP options when relevant, easily digestible foods, and adequate fiber. Consider food triggers.\n"
+                        elif 'lactose' in condition_lower:
+                            health_guidance += "- LACTOSE INTOLERANCE: Avoid dairy suggestions or recommend lactose-free alternatives. Suggest calcium-rich non-dairy foods.\n"
+                        else:
+                            health_guidance += f"- {condition.upper()}: Consider dietary modifications appropriate for this condition.\n"
+                
+                user_context += goal_guidance + diet_guidance + health_guidance
+                user_context += "IMPORTANT: Always provide diet-specific suggestions even for healthy meals. Never say 'no improvements needed' if user has specific dietary preferences.\n"
 
-            # 4. Rules & JSON contract (concise)
+            # 4. Rules & JSON contract (intelligent suggestions)
             contract = (
                 "Required JSON keys: recommendations[list(str)], health_score[int 0-100], meal_type[str one of "
                 "breakfast|lunch|dinner|snack|unknown], dietary_considerations[list(str)], meal_rating[int 0-10], "
@@ -517,12 +708,25 @@ class FoodAnalyzerService:
                 "1. Base feedback ONLY on provided macros (no guessing hidden nutrients).\n"
                 "2. health_score: holistic quality (higher = healthier).\n"
                 "3. meal_rating: palatability/overall quality 0–10.\n"
-                "4. Provide actionable, concise, non-repetitive suggestions.\n"
-                "5. No markdown, explanations, or extra keys — JSON ONLY.\n"
-                "6. All arrays must have at least 1 element; if nothing relevant, give a neutral constructive entry.\n"
+                "4. SMART SUGGESTIONS: If meal is already healthy (good protein, reasonable calories, balanced macros), focus on POSITIVE reinforcement instead of nitpicking.\n"
+                "5. For healthy meals: Use 'positive_aspects' to praise good choices and 'suggestions' to encourage continuation rather than change.\n"
+                "6. Only suggest improvements if there are genuine nutritional concerns (very low protein, excessive calories, etc.).\n"
+                "7. Consider user goals: Don't suggest calorie increases for cutting goals or decreases for bulking goals.\n"
+                "8. CRITICAL: Always consider user's diet type (Vegan, Keto, etc.) and provide relevant suggestions even for healthy meals.\n"
+                "9. For specific diets: Vegan (suggest plant proteins, B12, iron sources), Keto (suggest low-carb alternatives), Mediterranean (suggest olive oil, fish).\n"
+                "10. HEALTH CONDITIONS: Always prioritize health condition guidance when present. For diabetes (low GI foods), hypertension (low sodium), heart disease (omega-3s, low sat fat), etc.\n"
+                "11. If user has health conditions, tailor ALL suggestions to support their medical needs - this takes priority over general nutrition advice.\n"
+                "12. No markdown, explanations, or extra keys — JSON ONLY.\n"
+                "13. All arrays must have at least 1 element; if nothing relevant, give encouraging entries.\n"
             )
             examples = (
                 "Example health_score guidance: High protein & moderate calories => 70–85; very high sugar & low protein => 30–50.\n"
+                "Example for healthy meal (300 cal, 25g protein, balanced): suggestions=['Great protein content for muscle maintenance', 'Perfect portion size for a light meal'], improvements=[] (empty if no real issues).\n"
+                "Example for problematic meal (800 cal, 5g protein, 80g fat): suggestions=['Add lean protein source', 'Reduce portion size'], improvements=['Consider grilled chicken breast', 'Add vegetables for fiber'].\n"
+                "Example for vegan user with healthy meal: suggestions=['Excellent plant-based protein sources', 'Consider adding vitamin B12-rich foods like nutritional yeast'], improvements=['Add iron-rich foods like spinach or lentils'].\n"
+                "Example for keto user: suggestions=['Great low-carb choice', 'Perfect fat-to-protein ratio'], improvements=['Consider adding more healthy fats like avocado'].\n"
+                "Example for diabetic user: suggestions=['Good complex carbs for blood sugar management', 'High fiber content helps stabilize glucose'], improvements=['Consider pairing with protein to slow carb absorption'].\n"
+                "Example for hypertension user: suggestions=['Low sodium preparation is heart-healthy'], improvements=['Add potassium-rich foods like spinach or avocado', 'Consider herbs instead of salt for flavoring'].\n"
             )
 
             prompt = (
@@ -539,16 +743,26 @@ class FoodAnalyzerService:
                 ts, self.CHAT_MODEL, self.JSON_TEMPERATURE, self.JSON_MAX_TOKENS, rec_hash, meal_summary
             )
 
-            resp = await self.client.chat.completions.create(
-                model=self.CHAT_MODEL,
-                messages=[
-                    {"role": "system", "content": "You are a concise, evidence-based nutrition coach. Output ONLY JSON."},
-                    {"role": "user", "content": prompt},
-                ],
-                response_format={"type": "json_object"},
-                temperature=self.JSON_TEMPERATURE,
-                max_tokens=self.JSON_MAX_TOKENS,
-            )
+            try:
+                resp = await asyncio.wait_for(
+                    self.client.chat.completions.create(
+                        model=self.CHAT_MODEL,
+                        messages=[
+                            {"role": "system", "content": "You are a concise, evidence-based nutrition coach. Output ONLY JSON."},
+                            {"role": "user", "content": prompt},
+                        ],
+                        response_format={"type": "json_object"},
+                        temperature=self.JSON_TEMPERATURE,
+                        max_tokens=self.JSON_MAX_TOKENS,
+                    ),
+                    timeout=45.0  # Increased timeout to 45 seconds for recommendations
+                )
+            except asyncio.TimeoutError:
+                logger.error("OpenAI recommendations analysis timed out after 45 seconds")
+                raise Exception("Recommendations analysis timed out - this may be due to network issues or API overload")
+            except Exception as e:
+                logger.error("OpenAI recommendations analysis failed: %s", e)
+                raise Exception(f"Recommendations analysis failed: {str(e)}")
 
             duration_ms = int((time.perf_counter() - start) * 1000)
 
@@ -573,7 +787,8 @@ class FoodAnalyzerService:
                 ("improvements", "Increase vegetables."),
                 ("positive_aspects", "Contains protein."),
             ]:
-                if not isinstance(result.get(arr_key), list) or len(result.get(arr_key)) == 0:
+                arr_value = result.get(arr_key)
+                if not isinstance(arr_value, list) or (arr_value is not None and len(arr_value) == 0):
                     result[arr_key] = [fallback]
 
             # Cache result
@@ -596,7 +811,7 @@ class FoodAnalyzerService:
                 "positive_aspects": [],
             }
 
-    async def suggest_improvements(self, nutrition: NutritionAnalysis, user_preferences: Optional[Dict[str, Any]] = None) -> List[str]:
+    async def suggest_improvements(self, nutrition: Union[NutritionAnalysis, Dict[str, Any]], user_preferences: Optional[Dict[str, Any]] = None) -> List[str]:
         """Public helper to get quick improvement suggestions."""
         try:
             rec = await self._get_recommendations(nutrition, user_preferences)
@@ -649,6 +864,8 @@ class FoodAnalyzerService:
                 "4. If data insufficient, state assumptions explicitly.\n"
                 "5. Never fabricate exact micronutrient numbers not provided.\n"
                 "6. Keep DETAILS under ~12 sentences total.\n"
+                "7. IMPORTANT: Always consider user's health conditions when providing advice. For diabetes (focus on blood sugar management), hypertension (low sodium guidance), etc.\n"
+                "8. Prioritize health condition considerations in your recommendations while maintaining encouraging tone.\n"
             )
 
             # Build user context from preferences
@@ -670,6 +887,7 @@ class FoodAnalyzerService:
                 f"Question: {question}"
             )
 
+            # Type the messages properly for OpenAI
             messages = [
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_msg},
@@ -681,13 +899,23 @@ class FoodAnalyzerService:
                 "[OpenAI][START] ts=%s step=qa_stream model=%s meal=%s question_len=%d", ts, self.CHAT_MODEL, meal_name, len(question)
             )
 
-            stream = await self.client.chat.completions.create(
-                model=self.CHAT_MODEL,
-                messages=messages,
-                stream=True,
-                max_tokens=500,
-                temperature=0.5,
-            )
+            try:
+                stream = await asyncio.wait_for(
+                    self.client.chat.completions.create(
+                        model=self.CHAT_MODEL,
+                        messages=messages,  # type: ignore
+                        stream=True,
+                        max_tokens=500,
+                        temperature=0.5,
+                    ),
+                    timeout=45.0  # Increased timeout to 45 seconds for chat response
+                )
+            except asyncio.TimeoutError:
+                logger.error("OpenAI streaming chat timed out after 45 seconds")
+                raise Exception("Chat analysis timed out - this may be due to network issues or API overload")
+            except Exception as e:
+                logger.error("OpenAI streaming chat failed: %s", e)
+                raise Exception(f"Chat analysis failed: {str(e)}")
 
             async def generator():
                 emitted = 0

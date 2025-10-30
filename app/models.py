@@ -1,5 +1,6 @@
 """Data models for the FitPlate AI application."""
 
+import json
 import logging
 from typing import List, Literal, Optional, Union
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -40,7 +41,7 @@ class VisionFoodItem(FoodItemBase):
 
 class VisionAnalysisResponse(BaseModel):
     """Model for the complete vision analysis API response."""
-    items: List[VisionFoodItem] = Field(..., min_items=1, description="List of detected food items")
+    items: List[VisionFoodItem] = Field(..., description="List of detected food items")
 
     @model_validator(mode='after')
     def validate_items(self) -> 'VisionAnalysisResponse':
@@ -70,7 +71,7 @@ class NutritionBase(BaseModel):
     class Config:
         """Pydantic model configuration."""
         populate_by_name = True
-        allow_population_by_field_name = True
+        validate_by_name = True  # Updated for Pydantic V2
 
 class NutritionAPIResponse(NutritionBase):
     """Model for nutrition information from API with flexible typing."""
@@ -99,7 +100,6 @@ class NutritionAPIResponse(NutritionBase):
                     return default
                 try:
                     if value.startswith('[') and value.endswith(']'):
-                        import json
                         parsed = json.loads(value)
                         if isinstance(parsed, list):
                             return parsed
@@ -155,7 +155,7 @@ class NutritionAnalysisResponse(BaseModel):
         item_cals = [safe_number(item.calories) for item in self.items]
         
         if combined_cals and all(c is not None for c in item_cals):
-            total_cals = sum(item_cals)
+            total_cals = sum(c for c in item_cals if c is not None)
             if abs(combined_cals - total_cals) > total_cals * 0.2:  # 20% tolerance
                 logger.warning(
                     f"Combined calories ({combined_cals}) differ significantly from "
@@ -213,9 +213,16 @@ class MealRecommendations(BaseModel):
     """Model for meal recommendations and analysis."""
     meal_rating: float = Field(..., ge=0, le=10, description="Overall meal rating out of 10")
     health_score: float = Field(..., ge=0, le=100, description="Health score out of 100")
-    suggestions: List[str] = Field(..., min_items=1, description="List of suggested improvements")
+    suggestions: List[str] = Field(..., description="List of suggested improvements")
     improvements: List[str] = Field(..., description="List of specific areas for improvement")
     positive_aspects: List[str] = Field(..., description="List of positive aspects of the meal")
+
+    @field_validator('suggestions')
+    def validate_suggestions_not_empty(cls, v: List[str]) -> List[str]:
+        """Ensure suggestions list has at least one item."""
+        if not v:
+            raise ValueError("Suggestions list must have at least one item")
+        return v
 
     @model_validator(mode='after')
     def validate_recommendations(self) -> 'MealRecommendations':

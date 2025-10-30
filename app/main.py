@@ -21,13 +21,24 @@ if _ROOT not in _sys.path:
 
 from services.analyzer import FoodAnalyzerService
 
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
+# Better event loop management for debugging compatibility
+try:
+    loop = asyncio.get_event_loop()
+    if loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+except RuntimeError:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-nest_asyncio.apply()
+# Apply nest_asyncio only if needed
+try:
+    nest_asyncio.apply()
+except Exception as e:
+    logger.warning(f"Could not apply nest_asyncio: {e}")
 
 load_dotenv()
 CLIENT_AVAILABLE = False
@@ -46,6 +57,43 @@ def load_icons() -> Dict[str, str]:
     except Exception as e:
         logger.warning(f"Could not load icons.json: {e}")
         return {}
+
+def safe_run_async(coro):
+    """
+    Safely run async code in both normal execution and debugging environments.
+    
+    Args:
+        coro: Async coroutine to run
+        
+    Returns:
+        Result of the coroutine
+    """
+    try:
+        # Try to get the current event loop
+        current_loop = asyncio.get_event_loop()
+        if current_loop.is_running():
+            # If loop is already running (e.g., in Jupyter/debugging), 
+            # we need to use nest_asyncio
+            import nest_asyncio
+            nest_asyncio.apply()
+            return current_loop.run_until_complete(coro)
+        else:
+            return current_loop.run_until_complete(coro)
+    except RuntimeError:
+        # No event loop, create one
+        try:
+            return asyncio.run(coro)
+        except RuntimeError:
+            # Fallback: create new loop
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            try:
+                return new_loop.run_until_complete(coro)
+            finally:
+                new_loop.close()
+    except Exception as e:
+        logger.error(f"Error running async code: {e}")
+        raise
 
 # Global icons dictionary
 ICONS = load_icons()
@@ -125,9 +173,10 @@ async def process_image(image, analyzer: FoodAnalyzerService, user_preferences: 
 async def handle_chat(analyzer: FoodAnalyzerService, question: str, analysis_result: Dict[str, Any], user_preferences: Dict[str, Any]):
     import time
     from datetime import datetime
+    
+    _start = time.perf_counter()  # Initialize at the beginning
     try:
         _ts = datetime.utcnow().isoformat()
-        _start = time.perf_counter()
         logger.info(f"[Chat][START] ts={_ts} question_len={len(question)}")
         stream = await analyzer.answer_question(question, analysis_result, user_preferences)
         token_count = 0
@@ -139,71 +188,195 @@ async def handle_chat(analyzer: FoodAnalyzerService, question: str, analysis_res
         _dur_ms = int((time.perf_counter() - _start) * 1000)
         logger.info(f"[Chat][END] dur_ms={_dur_ms} tokens={token_count}")
     except Exception as e:
-        _dur_ms = int((time.perf_counter() - _start) * 1000) if '_start' in locals() else 0
+        _dur_ms = int((time.perf_counter() - _start) * 1000)
         logger.error(f"[Chat][ERROR] dur_ms={_dur_ms} error={str(e)}")
         yield f"Sorry, I encountered an error: {str(e)}"
 
-def generate_chat_suggestions(user_preferences: Dict[str, Any]) -> List[str]:
-    """Generate personalized chat suggestions based on user preferences"""
-    suggestions = []
+def generate_chat_suggestions(user_preferences: Dict[str, Any], analyzer: Optional[FoodAnalyzerService] = None) -> List[str]:
+    """Generate AI-powered personalized chat suggestions based on user preferences"""
     
-    goal = user_preferences.get('goal', 'Balanced')
-    diet = user_preferences.get('diet', 'None')
-    health_conditions = user_preferences.get('health_conditions', [])
-    calorie_target = user_preferences.get('calorie_target', 2500)
+    # Fallback suggestions if AI generation fails or analyzer is not available
+    fallback_suggestions = [
+        "Is this a well-balanced meal for my goals?",
+        "What are the main nutritional benefits of this meal?",
+        "How can I improve this meal to better suit my needs?"
+    ]
     
-    # Goal-adapted questions
-    if goal == 'Bulking':
-        suggestions.extend([
-            "Does this meal provide enough protein for bulking?",
-            "How can I add more calories to support my bulking goals?"
-        ])
-    elif goal == 'Cutting':
-        suggestions.extend([
-            "How can I reduce calories while keeping this meal satisfying?",
-            f"Is this meal appropriate for my daily calorie target of {calorie_target} kcal?"
-        ])
-    elif goal == 'Maintenance':
-        suggestions.extend([
-            "Does this meal provide enough protein for maintenance?",
-            f"Is this meal appropriate for my daily calorie target of {calorie_target} kcal?"
-        ])
-    else:  # Balanced
-        suggestions.extend([
-            "Is this a well-balanced meal for my goals?",
-            "Can I add more vegetables or fiber to improve this meal?"
-        ])
+    # If no analyzer available (demo mode), return fallback
+    if analyzer is None:
+        return fallback_suggestions
     
-    # Diet-adapted questions
-    if diet != 'None':
-        suggestions.append(f"Is this meal suitable for a {diet} diet?")
-        if diet in ['Keto', 'Vegan', 'Vegetarian', 'Mediterranean']:
-            suggestions.append(f"Which ingredients should I replace to make this meal compliant with a {diet} diet?")
-    
-    # Health condition-adapted questions
-    if health_conditions:
-        # Handle multiple conditions - pick the most relevant ones
-        primary_condition = health_conditions[0]
-        suggestions.append(f"Is this meal suitable for someone with {primary_condition}?")
+    try:
+        # Build user persona description
+        goal = user_preferences.get('goal', 'Balanced')
+        diet = user_preferences.get('diet', 'None')
+        health_conditions = user_preferences.get('health_conditions', [])
+        calorie_target = user_preferences.get('calorie_target', 2500)
         
-        # Add specific allergen questions based on selected conditions
-        if 'Celiac Disease' in health_conditions:
-            suggestions.append("Does this meal contain gluten?")
-        elif 'Lactose Intolerance' in health_conditions:
-            suggestions.append("Does this meal contain lactose?")
-        elif len(health_conditions) > 1:
-            # If multiple conditions but no specific allergen ones, ask about all conditions
-            conditions_str = ", ".join(health_conditions[:2])  # Limit to first 2 for readability
-            suggestions.append(f"Is this meal safe for my health conditions ({conditions_str})?")
-    
-    # Always include some general options
-    suggestions.extend([
-        "Which ingredients should I reduce or replace to make this meal healthier?",
-        "What are the main nutritional benefits of this meal?"
-    ])
-    
-    # Return max 3 suggestions to fit the UI nicely
-    return suggestions[:3]
+        # Create persona context
+        persona_parts = [f"Goal: {goal}"]
+        if diet != 'None':
+            persona_parts.append(f"Diet: {diet}")
+        if health_conditions:
+            persona_parts.append(f"Health Conditions: {', '.join(health_conditions)}")
+        persona_parts.append(f"Daily Calorie Target: {calorie_target} kcal")
+        
+        persona_context = " | ".join(persona_parts)
+        
+        # Check session state cache first to avoid repeated API calls
+        if 'chat_suggestions_cache' not in st.session_state:
+            st.session_state.chat_suggestions_cache = {}
+        
+        cache_key = persona_context
+        if cache_key in st.session_state.chat_suggestions_cache:
+            logger.info("Using cached chat suggestions for user preferences")
+            return st.session_state.chat_suggestions_cache[cache_key]
+        
+        # Generate suggestions using AI
+        logger.info("Generating new AI-powered chat suggestions")
+        suggestions = safe_run_async(_generate_ai_suggestions(analyzer, persona_context))
+        
+        # Validate and cache suggestions
+        if suggestions and len(suggestions) >= 3:
+            final_suggestions = suggestions[:3]
+            st.session_state.chat_suggestions_cache[cache_key] = final_suggestions
+            return final_suggestions
+        else:
+            return fallback_suggestions
+            
+    except Exception as e:
+        logger.warning(f"Failed to generate AI suggestions: {e}")
+        return fallback_suggestions
+
+async def _generate_ai_suggestions(analyzer: FoodAnalyzerService, persona_context: str) -> List[str]:
+    """Generate AI-powered chat suggestions using OpenAI"""
+    try:
+        logger.info(f"Generating AI suggestions for persona: {persona_context}")
+        
+        prompt = f"""You are a nutrition coach helping users ask relevant questions about their meal analysis.
+
+User Profile: {persona_context}
+
+Generate exactly 3 short, actionable questions (max 12 words each) that this user would want to ask about their meal analysis. 
+
+Guidelines:
+1. Questions should be relevant to their specific goals, diet, and health conditions
+2. Make questions practical and actionable
+3. Avoid generic questions - personalize for this user profile
+4. Keep questions conversational and natural
+5. Focus on areas where this user would need guidance
+
+Examples of good personalized questions:
+- For Keto diet: "Are the carbs in this meal too high for keto?"
+- For Bulking goal: "Does this meal have enough protein for muscle growth?"
+- For Diabetes: "Will this meal spike my blood sugar levels?"
+- For Cutting: "How can I reduce calories without losing satisfaction?"
+
+Return ONLY a JSON array of exactly 3 question strings, no other text:
+["question 1", "question 2", "question 3"]"""
+
+        start_time = time.time()
+        response = await asyncio.wait_for(
+            analyzer.client.chat.completions.create(
+                model=analyzer.CHAT_MODEL,
+                messages=[
+                    {"role": "system", "content": "You are a helpful nutrition coach. Return ONLY valid JSON with exactly 3 personalized questions."},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.7,
+                max_tokens=200,
+            ),
+            timeout=30.0  # 30 second timeout for suggestion generation
+        )
+        
+        duration = time.time() - start_time
+        logger.info(f"AI suggestion generation completed in {duration:.2f}s")
+        
+        if not response.choices or not response.choices[0].message.content:
+            raise ValueError("Empty response from OpenAI")
+            
+        content = response.choices[0].message.content.strip()
+        logger.debug(f"Raw AI response: {content}")
+        
+        # Clean and parse the response
+        if content.startswith('```'):
+            content = content.strip('`').replace('json', '').strip()
+        
+        # Parse the JSON response
+        import json
+        try:
+            # Try direct JSON parsing first
+            parsed = json.loads(content)
+            if isinstance(parsed, dict):
+                # Handle various response structures
+                if 'questions' in parsed:
+                    suggestions = parsed['questions']
+                elif 'suggestions' in parsed:
+                    suggestions = parsed['suggestions']
+                elif any(key in parsed for key in ['question1', 'question2', 'question3']):
+                    suggestions = [parsed.get(f'question{i}', '') for i in range(1, 4)]
+                    suggestions = [s for s in suggestions if s]  # Remove empty strings
+                else:
+                    # If it's a dict but no recognized structure, take first 3 values that look like questions
+                    suggestions = [v for v in parsed.values() if isinstance(v, str) and '?' in v][:3]
+            elif isinstance(parsed, list):
+                suggestions = parsed
+            else:
+                raise ValueError("Invalid JSON structure")
+                
+        except json.JSONDecodeError as e:
+            logger.warning(f"JSON parsing failed: {e}. Attempting text extraction from: {content[:100]}...")
+            # Try to extract questions from text if JSON parsing fails
+            suggestions = []
+            
+            # Try various text patterns
+            lines = content.split('\n')
+            for line in lines:
+                line = line.strip()
+                # Remove numbering and quotes
+                clean_line = re.sub(r'^\d+\.?\s*', '', line)  # Remove "1. " prefix
+                clean_line = clean_line.strip('\'"')  # Remove quotes
+                
+                if len(clean_line) > 10 and ('?' in clean_line or any(word in clean_line.lower() for word in ['how', 'what', 'is', 'does', 'can', 'should', 'will'])):
+                    suggestions.append(clean_line)
+            
+            # If still no suggestions, try comma-separated format
+            if not suggestions and ',' in content:
+                parts = content.split(',')
+                for part in parts:
+                    clean_part = part.strip().strip('\'"')
+                    if len(clean_part) > 10:
+                        suggestions.append(clean_part)
+        
+        # Validate suggestions
+        valid_suggestions = []
+        for suggestion in suggestions:
+            if isinstance(suggestion, str) and len(suggestion.strip()) > 5:
+                # Clean up the suggestion
+                clean_suggestion = suggestion.strip()
+                # Remove any remaining quotes or brackets
+                clean_suggestion = re.sub(r'^[\[\]"\']|[\[\]"\']$', '', clean_suggestion)
+                # Ensure it ends with a question mark
+                if not clean_suggestion.endswith('?'):
+                    clean_suggestion += '?'
+                # Capitalize first letter
+                if clean_suggestion:
+                    clean_suggestion = clean_suggestion[0].upper() + clean_suggestion[1:]
+                valid_suggestions.append(clean_suggestion)
+        
+        if len(valid_suggestions) >= 3:
+            logger.info(f"Generated {len(valid_suggestions)} valid AI suggestions: {valid_suggestions[:3]}")
+            return valid_suggestions[:3]
+        else:
+            raise ValueError(f"Not enough valid suggestions generated. Got {len(valid_suggestions)}: {valid_suggestions}")
+            
+    except asyncio.TimeoutError:
+        logger.error("AI suggestion generation timed out after 30 seconds")
+        raise Exception("Suggestion generation timed out - this may be due to network issues or API overload")
+    except Exception as e:
+        logger.error(f"Error generating AI suggestions: {e}")
+        raise
 
 def load_styles():
     st.markdown(
@@ -414,11 +587,15 @@ def main():
         st.markdown("### 🧪 Demo Mode")
         demo_mode = st.toggle("Run without API (JSON)", value=demo_default)
         json_path = st.text_input("Demo JSON path", value=os.getenv('UX_DATA_JSON', 'data/demo_meal.json')) if demo_mode else None
+        
+        st.markdown("### ⚡ Speed Settings")
+        speed_mode = st.toggle("Fast Mode (Faster analysis, less detail)", value=True)
+        if speed_mode:
+            st.info("🚀 Fast mode: Reduced tokens, limited items, optimized prompts")
 
     # Initialize OpenAI client and analyzer only if not in demo mode
     analyzer: Optional[FoodAnalyzerService] = None
     if not demo_mode:
-        loop = asyncio.get_event_loop()
         api_key = os.getenv("OPENAI_API_KEY") or os.getenv("openai_key")
         if not api_key:
             st.error("No OpenAI API key found. Enable Demo Mode or set OPENAI_API_KEY in your .env file.")
@@ -431,12 +608,15 @@ def main():
             st.error(f"Failed to initialize OpenAI client: {e}")
             return
 
-        access_ok, error_msg = loop.run_until_complete(verify_openai_access(client))
+        access_ok, error_msg = safe_run_async(verify_openai_access(client))
         if not access_ok:
             st.error(f"⚠️ OpenAI API Error: {error_msg}")
             st.info("Turn on Demo Mode in the sidebar to run without API access.")
             return
         analyzer = FoodAnalyzerService(api_key=api_key)
+        # Apply speed mode settings
+        if 'speed_mode' in locals() and speed_mode:
+            analyzer.enable_ultra_fast_mode()
     st.write("Upload a meal photo or use your camera to analyze your food and chat about your goals.")
     tab_upload, tab_camera = st.tabs(["📂 Upload Photo", "📷 Take Photo"]) 
     image = None
@@ -478,32 +658,54 @@ def main():
     if selected_bytes:
         image = Image.open(io.BytesIO(selected_bytes))
         # Use session state to cache analysis results and avoid re-analyzing on chat interactions
-        # Create a unique key for this image
+        # Create a unique key for this image + user preferences
         import hashlib
         image_hash = hashlib.md5(selected_bytes).hexdigest()
         
-        # Check if we already have results for this image
+        # Create preferences hash to invalidate suggestions when preferences change
+        prefs_str = json.dumps(st.session_state.prefs, sort_keys=True)
+        prefs_hash = hashlib.md5(prefs_str.encode()).hexdigest()
+        cache_key = f"{image_hash}_{prefs_hash}"
+        
+        # Check if we already have results for this image + preferences combination
         if 'analysis_cache' not in st.session_state:
             st.session_state.analysis_cache = {}
         
-        if image_hash in st.session_state.analysis_cache:
-            # Use cached results
-            cached_data = st.session_state.analysis_cache[image_hash]
+        # Initialize variables
+        dish = None
+        nutrition = None
+        suggestions = []
+        
+        if cache_key in st.session_state.analysis_cache:
+            # Use cached results (including suggestions that match current preferences)
+            cached_data = st.session_state.analysis_cache[cache_key]
             dish = cached_data['dish']
             nutrition = cached_data['nutrition']
+            suggestions = cached_data['suggestions']
+        elif image_hash in [k.split('_')[0] for k in st.session_state.analysis_cache.keys()]:
+            # We have analysis for this image but with different preferences
+            # Reuse analysis but regenerate suggestions
+            for key, cached_data in st.session_state.analysis_cache.items():
+                if key.startswith(image_hash):
+                    dish = cached_data['dish']
+                    nutrition = cached_data['nutrition']
+                    break
             
-            # Check if suggestions exist in cache (for backward compatibility)
-            if 'suggestions' in cached_data:
-                suggestions = cached_data['suggestions']
-            else:
-                # Old cache format - fetch suggestions now
-                if demo_mode:
-                    suggestions = []
-                else:
-                    with st.spinner("Getting personalized suggestions..."):
-                        suggestions = loop.run_until_complete(analyzer.suggest_improvements(nutrition))
-                # Update cache with suggestions
-                st.session_state.analysis_cache[image_hash]['suggestions'] = suggestions
+            # Generate new suggestions with current preferences
+            if not demo_mode and nutrition is not None:
+                with st.spinner("Updating suggestions for your preferences..."):
+                    if analyzer is not None:
+                        suggestions = safe_run_async(analyzer.suggest_improvements(nutrition, st.session_state.prefs))
+                    else:
+                        suggestions = []
+            
+            # Cache the new combination
+            if dish is not None and nutrition is not None:
+                st.session_state.analysis_cache[cache_key] = {
+                    'dish': dish,
+                    'nutrition': nutrition,
+                    'suggestions': suggestions
+                }
         else:
             # Perform analysis and cache results
             loading_placeholder = st.empty()
@@ -513,29 +715,41 @@ def main():
                 st.markdown('<div class="card"><div class="skel-grid"><div class="skel-line shimmer" style="height:24px"></div><div class="skel-line shimmer" style="height:24px"></div><div class="skel-line shimmer" style="height:24px"></div></div></div>', unsafe_allow_html=True)
             if demo_mode:
                 with st.spinner("Loading demo analysis..."):
-                    dish, nutrition, suggestions = _load_demo_from_json(json_path)
+                    if json_path is not None:
+                        dish, nutrition, suggestions = _load_demo_from_json(json_path)
+                    else:
+                        st.error("Demo JSON path not provided")
+                        return
             else:
                 with st.spinner("Analyzing your dish..."):
-                    loop = asyncio.get_event_loop()
-                    dish, nutrition = loop.run_until_complete(process_image(image, analyzer, st.session_state.prefs))
+                    if analyzer is not None:
+                        dish, nutrition = safe_run_async(process_image(image, analyzer, st.session_state.prefs))
+                    else:
+                        st.error("Analyzer not initialized")
+                        return
             loading_placeholder.empty()
             
             # Get AI suggestions (API) or use demo suggestions
+            suggestions = []  # Initialize suggestions
             if demo_mode:
-                suggestions = suggestions if 'suggestions' in locals() else []
+                # suggestions should be set from demo data above
+                pass
             else:
                 with st.spinner("Getting personalized suggestions..."):
-                    suggestions = loop.run_until_complete(analyzer.suggest_improvements(nutrition, st.session_state.prefs))
+                    if analyzer is not None:
+                        suggestions = safe_run_async(analyzer.suggest_improvements(nutrition, st.session_state.prefs))
+                    else:
+                        suggestions = []
             
-            # Cache the results including suggestions
-            st.session_state.analysis_cache[image_hash] = {
+            # Cache the results including suggestions with the preference-aware cache key
+            st.session_state.analysis_cache[cache_key] = {
                 'dish': dish,
                 'nutrition': nutrition,
                 'suggestions': suggestions
             }
         
         # Check if this is a non-food item
-        if dish.get('is_non_food', False) or dish['dish_name'] == "Non-Food Item":
+        if dish and (dish.get('is_non_food', False) or dish['dish_name'] == "Non-Food Item"):
             st.warning("🚫 **Non-Food Item Detected**")
             st.markdown("""
             It looks like the uploaded image doesn't contain food items. 
@@ -552,6 +766,11 @@ def main():
         # Always render the UI (using cached or fresh data)
         if not nutrition or not nutrition.get("nutrition_summary"):
             st.error("⚠️ Could not analyze nutrition information")
+            return
+        
+        # Ensure we have valid dish data
+        if not dish:
+            st.error("⚠️ Could not analyze dish information")
             return
         
         # Prepare common values for the left info column
@@ -601,26 +820,17 @@ def main():
                     unsafe_allow_html=True,
                 )
 
-                # Meal header + calories (as a card)
+                # Simplified meal card - just name, confidence, and calorie bar
                 cal_val = nutrition_summary["calories"]["value"]
                 cal_dv = nutrition_summary["calories"]["daily_value"]
-                serving_size = meal_info.get("serving_size", "N/A")
                 title_html = f"<div class='meal-title-row'><div class='meal-title'>{confidence_emoji} {dish['dish_name']}</div><span class='meal-badge'>{confidence:.1f}%</span></div>"
-                meta_html = f"<div class='meal-meta'>{get_icon('high calories')} {cal_val} kcal • {cal_dv}% DV · 📏 Serving: {serving_size}</div>"
-                tags_html = ""
-                if diet_tags:
-                    tags_html = "<div class='diet-chips'>" + " ".join([f"<span class='diet-chip'>🏷️ {tag}</span>" for tag in diet_tags]) + "</div>"
+                
                 meal_card_html = f"""
                     <div class='ui-card'>
                         {title_html}
-                        {meta_html}
-                        {tags_html}
-                        <div class='stat-card'>
-                          <div class='stat-label'>Total Calories</div>
-                          <div class='stat-value'>{cal_val} <span>kcal</span></div>
-                          <div class='stat-meter'><div class='fill' style='width:{cal_dv}%' /></div>
-                          <div class='stat-sub'>{cal_dv}% Daily Value • Serving: {serving_size}</div>
-                        </div>
+                        <div class='stat-value'>{cal_val} <span>kcal</span></div>
+                        <div class='stat-meter'><div class='fill' style='width:{cal_dv}%'></div></div>
+                        <div class='stat-sub'>{cal_dv}% Daily Value</div>
                     </div>
                 """
                 st.markdown(meal_card_html, unsafe_allow_html=True)
@@ -655,7 +865,7 @@ def main():
                         for s in suggestions
                     ]
                     st.markdown(
-                        f"<div class='ui-card'><div class='ui-card-title'>{get_icon('ai_suggestions')} AI Suggestions</div><div class='chips'>{''.join(sugg_chips)}</div></div>",
+                        f"<div class='chips'>{''.join(sugg_chips)}</div>",
                         unsafe_allow_html=True,
                     )
 
@@ -666,7 +876,7 @@ def main():
                         for w in warn_list
                     ]
                     st.markdown(
-                        f"<div class='ui-card'><div class='ui-card-title'>{get_icon('warnings')} Warnings</div><div class='chips'>{''.join(warn_chips)}</div></div>",
+                        f"<div class='chips'>{''.join(warn_chips)}</div>",
                         unsafe_allow_html=True,
                     )
 
@@ -753,8 +963,26 @@ def main():
             st.markdown('<hr/>', unsafe_allow_html=True)
             st.markdown('<div class="subsection-header">Ask about your meal</div>', unsafe_allow_html=True)
             
-            # Generate personalized chat suggestions
-            chat_suggestions = generate_chat_suggestions(st.session_state.prefs)
+            # Generate personalized chat suggestions with loading indicator
+            persona_parts = [f"Goal: {st.session_state.prefs.get('goal', 'Balanced')}"]
+            if st.session_state.prefs.get('diet', 'None') != 'None':
+                persona_parts.append(f"Diet: {st.session_state.prefs.get('diet')}")
+            if st.session_state.prefs.get('health_conditions', []):
+                persona_parts.append(f"Health Conditions: {', '.join(st.session_state.prefs.get('health_conditions', []))}")
+            persona_context = " | ".join(persona_parts)
+            
+            # Check if we need to generate new suggestions
+            cache_key = persona_context
+            suggestions_cached = (
+                'chat_suggestions_cache' in st.session_state and 
+                cache_key in st.session_state.chat_suggestions_cache
+            )
+            
+            if not suggestions_cached:
+                with st.spinner("🤖 Generating personalized questions..."):
+                    chat_suggestions = generate_chat_suggestions(st.session_state.prefs, analyzer)
+            else:
+                chat_suggestions = generate_chat_suggestions(st.session_state.prefs, analyzer)
             
             cols = st.columns(len(chat_suggestions))
             preset = None
@@ -772,8 +1000,11 @@ def main():
                     st.write(user_question)
                 with st.chat_message("assistant", avatar="🍽️"):
                     async def stream_answer():
-                        async for token in handle_chat(analyzer, user_question, nutrition, st.session_state.prefs):
-                            yield token
+                        if analyzer is not None:
+                            async for token in handle_chat(analyzer, user_question, nutrition, st.session_state.prefs):
+                                yield token
+                        else:
+                            yield "Sorry, the analyzer is not available in demo mode."
                     st.write_stream(stream_answer())
         elif nutrition and demo_mode:
             st.markdown('<hr/>', unsafe_allow_html=True)

@@ -618,3 +618,57 @@ a:hover {
 .stChatInputContainer .stButton > button:active {
     transform: translateY(-1px) scale(1.05) !important;
 }
+
+/* Stat Card Styles */
+.stat-card {
+    margin-top: 1rem !important;
+    padding: 1rem !important;
+    border-radius: 14px !important;
+    background: linear-gradient(180deg, rgba(99, 102, 241, 0.10), rgba(99, 102, 241, 0.04)) !important;
+    border: 1px solid rgba(99, 102, 241, 0.25) !important;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06) !important;
+}
+
+.stat-label {
+    font-size: 0.875rem !important;
+    font-weight: 600 !important;
+    color: rgba(99, 102, 241, 0.8) !important;
+    margin-bottom: 0.5rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.5px !important;
+}
+
+.stat-value {
+    font-size: 1.5rem !important;
+    font-weight: 700 !important;
+    color: var(--text-dark) !important;
+    margin-bottom: 0.75rem !important;
+}
+
+.stat-value span {
+    font-size: 0.875rem !important;
+    font-weight: 500 !important;
+    color: rgba(99, 102, 241, 0.7) !important;
+}
+
+.stat-meter {
+    width: 100% !important;
+    height: 6px !important;
+    background: rgba(99, 102, 241, 0.15) !important;
+    border-radius: 3px !important;
+    overflow: hidden !important;
+    margin-bottom: 0.5rem !important;
+}
+
+.stat-meter .fill {
+    height: 100% !important;
+    background: linear-gradient(90deg, rgba(99, 102, 241, 0.8), rgba(99, 102, 241, 1)) !important;
+    border-radius: 3px !important;
+    transition: width 0.8s ease !important;
+}
+
+.stat-sub {
+    font-size: 0.75rem !important;
+    color: rgba(99, 102, 241, 0.6) !important;
+    font-weight: 500 !important;
+}
