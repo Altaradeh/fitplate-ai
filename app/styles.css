@@ -1,3 +1,16 @@
+/* Diet Tag Chip */
+.chip-tag {
+    background: linear-gradient(135deg, var(--accent-green) 0%, var(--secondary-green) 100%) !important;
+    color: var(--text-dark) !important;
+    border: 2px solid var(--primary-green) !important;
+}
+
+/* Health Score Chip */
+.chip-health {
+    background: linear-gradient(135deg, #e0f7fa 0%, #a5d6a7 100%) !important;
+    color: var(--text-dark) !important;
+    border: 2px solid #26a69a !important;
+}
 /* UI Card styles */
 .ui-card {
     background: linear-gradient(135deg, rgba(232, 245, 233, 0.95) 0%, rgba(240, 255, 240, 0.95) 100%) !important;
@@ -35,15 +48,7 @@
     background: linear-gradient(135deg, rgba(212, 237, 218, 0.98) 0%, rgba(200, 230, 201, 0.98) 100%) !important;
 }
 
-/* UI Card Title */
-.ui-card-title {
-    font-size: 1.2rem !important;
-    font-weight: 900 !important;
-    color: var(--text-dark) !important;
-    margin-bottom: 1.2rem !important;
-    letter-spacing: -0.3px !important;
-    transition: all var(--transition-fast) !important;
-}
+/* UI Card Title - unified above, duplicate removed */
 
 /* Chips container */
 .chips {
@@ -328,18 +333,7 @@ body::after {
 }
 
 /* Cards */
-.stCard, .ui-card {
-    background: linear-gradient(135deg, rgba(232, 245, 233, 0.95) 0%, rgba(240, 255, 240, 0.95) 100%) !important;
-    border-radius: var(--border-radius-lg) !important;
-    padding: 2rem !important;
-    margin-bottom: 2rem !important;
-    box-shadow: var(--shadow-card) !important;
-    border: 2px solid rgba(76, 175, 80, 0.2) !important;
-    transition: all var(--transition) !important;
-    color: var(--text-dark) !important;
-    position: relative !important;
-    overflow: hidden !important;
-}
+/* .stCard, .ui-card duplicate removed. Use unified .ui-card above. */
 
 .stCard::before, .ui-card::before {
     content: '' !important;

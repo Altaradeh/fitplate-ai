@@ -46,6 +46,76 @@ if not logger.handlers:
 logger.setLevel(logging.INFO)
 logger.propagate = False
 
+def _get_user_context(user_preferences: Optional[dict] = None) -> str:
+    # 3. Build user context from preferences
+    user_context = ""
+    if user_preferences:
+        goal = user_preferences.get("goal", "Balanced")
+        diet = user_preferences.get("diet", "None")
+        health_conditions = user_preferences.get("health_conditions", [])
+        calorie_target = user_preferences.get("calorie_target", 2500)
+
+        user_context = (
+            f"\nUSER PROFILE:\n"
+            f"- Goal: {goal}\n"
+            f"- Diet: {diet}\n"
+            f"- Calorie Target: {calorie_target} kcal/day\n"
+        )
+        if health_conditions:
+            user_context += f"- Health Conditions: {', '.join(health_conditions)}\n"
+
+        # ---- GOAL GUIDANCE ----
+        goal_guidance_map = {
+            "Cutting": "Cutting goal: prioritize satiety and adequate protein; avoid calorie increases.",
+            "Bulking": "Bulking goal: ensure sufficient calories and high protein for muscle growth.",
+            "Maintenance": "Maintenance goal: maintain balanced, sustainable nutrition.",
+            "Balanced": "Balanced goal: general health focus with even macro distribution.",
+        }
+        goal_guidance = goal_guidance_map.get(goal, "Balanced goal: general health focus.")
+
+        # ---- DIET GUIDANCE ----
+        diet_guidance_map = {
+            "Vegan": "Vegan diet: plant-based proteins (tofu, lentils), B12 and iron sources, calcium from greens or tahini.",
+            "Vegetarian": "Vegetarian diet: plant proteins and dairy; ensure B12 and iron intake.",
+            "Keto": "Keto diet: low-carb, high-fat, moderate protein; avoid sugars and grains.",
+            "Mediterranean": "Mediterranean diet: olive oil, fish, nuts, legumes, fresh vegetables.",
+        }
+        diet_guidance = diet_guidance_map.get(
+            diet, f"{diet} diet: apply appropriate dietary logic." if diet != "None" else "No specific diet."
+        )
+
+        # ---- HEALTH GUIDANCE ----
+        health_guidance = ""
+        if health_conditions:
+            health_guidance = "Health Conditions:\n"
+            for cond in health_conditions:
+                c = cond.lower()
+                if "diabetes" in c:
+                    health_guidance += "- Diabetes: prefer low-GI, fiber-rich, balanced carb-protein meals.\n"
+                elif "hypertension" in c or "high blood pressure" in c:
+                    health_guidance += "- Hypertension: low sodium, potassium-rich, heart-healthy foods.\n"
+                elif "heart" in c or "cardio" in c:
+                    health_guidance += "- Heart Disease: omega-3s, fiber, low saturated fat.\n"
+                elif "cholesterol" in c:
+                    health_guidance += "- High Cholesterol: soluble fiber, lean proteins, avoid trans fats.\n"
+                elif "kidney" in c or "renal" in c:
+                    health_guidance += "- Kidney Disease: moderate protein, low sodium and phosphorus.\n"
+                elif "celiac" in c or "gluten" in c:
+                    health_guidance += "- Celiac/Gluten Sensitivity: ensure gluten-free foods.\n"
+                elif "ibs" in c:
+                    health_guidance += "- IBS: low-FODMAP, easily digestible foods, watch triggers.\n"
+                elif "lactose" in c:
+                    health_guidance += "- Lactose Intolerance: use lactose-free or calcium-rich non-dairy options.\n"
+                else:
+                    health_guidance += f"- {cond}: apply standard dietary precautions.\n"
+
+        user_context += f"{goal_guidance}\n{diet_guidance}\n{health_guidance}"
+        user_context += (
+            "Important: Always include diet- or condition-specific suggestions. "
+            "Never return 'no improvements needed' if user has active preferences or conditions.\n"
+        )
+    return user_context
+
 
 class FoodAnalyzerService:
     def __init__(self, api_key: str):
@@ -630,111 +700,84 @@ class FoodAnalyzerService:
             if cache_key in self._rec_cache:
                 return self._rec_cache[cache_key]
 
-            # 3. Build user context from preferences
-            user_context = ""
-            goal_guidance = ""
-            diet_guidance = ""
-            health_guidance = ""
-            if user_preferences:
-                goal = user_preferences.get('goal', 'Balanced')
-                diet = user_preferences.get('diet', 'None')
-                health_conditions = user_preferences.get('health_conditions', [])
-                calorie_target = user_preferences.get('calorie_target', 2500)
-                
-                user_context = f"\nUser Profile:\n"
-                user_context += f"- Goal: {goal}\n"
-                user_context += f"- Diet: {diet}\n"
-                if health_conditions:
-                    user_context += f"- Health Conditions: {', '.join(health_conditions)}\n"
-                user_context += f"- Daily Calorie Target: {calorie_target}\n"
-                
-                # Add goal-specific guidance
-                if goal == 'Cutting':
-                    goal_guidance = "User is cutting: favor suggestions that maintain satiety while keeping calories appropriate. Don't suggest increasing calories unless severely inadequate.\n"
-                elif goal == 'Bulking':
-                    goal_guidance = "User is bulking: focus on adequate protein and calories for muscle growth. Suggest calorie increases only if very low.\n"
-                elif goal == 'Maintenance':
-                    goal_guidance = "User is maintaining: focus on balanced nutrition and sustainable eating patterns.\n"
-                else:  # Balanced
-                    goal_guidance = "User wants balanced nutrition: focus on overall health and nutritional adequacy.\n"
-                
-                # Add diet-specific guidance
-                if diet == 'Vegan':
-                    diet_guidance = "User follows VEGAN diet: ALWAYS suggest plant-based protein sources (legumes, tofu, tempeh), vitamin B12 considerations, iron-rich foods (spinach, lentils), and calcium sources (tahini, leafy greens). Praise plant-based choices.\n"
-                elif diet == 'Keto':
-                    diet_guidance = "User follows KETO diet: Focus on low-carb suggestions, healthy fats (avocado, nuts, olive oil), and adequate protein. Avoid high-carb recommendations.\n"
-                elif diet == 'Vegetarian':
-                    diet_guidance = "User is VEGETARIAN: Suggest plant-based proteins, dairy sources, and nutrient-dense options. Consider B12 and iron needs.\n"
-                elif diet == 'Mediterranean':
-                    diet_guidance = "User follows MEDITERRANEAN diet: Emphasize olive oil, fish, nuts, legumes, and fresh vegetables. Praise Mediterranean-style choices.\n"
-                elif diet != 'None':
-                    diet_guidance = f"User follows {diet} diet: Provide relevant dietary suggestions and considerations.\n"
-                
-                # Add health condition-specific guidance
-                if health_conditions:
-                    health_guidance = "Health condition considerations:\n"
-                    for condition in health_conditions:
-                        condition_lower = condition.lower()
-                        if 'diabetes' in condition_lower or 'diabetic' in condition_lower:
-                            health_guidance += "- DIABETES: Focus on low glycemic index foods, fiber-rich options, and balanced meals to manage blood sugar. Suggest complex carbs over simple sugars.\n"
-                        elif 'hypertension' in condition_lower or 'high blood pressure' in condition_lower:
-                            health_guidance += "- HYPERTENSION: Recommend low-sodium options, potassium-rich foods (bananas, leafy greens), and heart-healthy choices. Avoid high-sodium processed foods.\n"
-                        elif 'heart' in condition_lower or 'cardiovascular' in condition_lower:
-                            health_guidance += "- HEART DISEASE: Emphasize omega-3 fatty acids (fish, walnuts), fiber-rich foods, and limit saturated fats. Suggest heart-healthy cooking methods.\n"
-                        elif 'cholesterol' in condition_lower:
-                            health_guidance += "- HIGH CHOLESTEROL: Focus on soluble fiber foods (oats, beans), plant sterols, and lean proteins. Limit saturated and trans fats.\n"
-                        elif 'kidney' in condition_lower or 'renal' in condition_lower:
-                            health_guidance += "- KIDNEY DISEASE: Monitor protein intake, limit sodium and phosphorus. Suggest appropriate portion sizes and kidney-friendly foods.\n"
-                        elif 'celiac' in condition_lower or 'gluten' in condition_lower:
-                            health_guidance += "- CELIAC/GLUTEN SENSITIVITY: Ensure all suggestions are gluten-free. Recommend naturally gluten-free grains like quinoa, rice.\n"
-                        elif 'ibs' in condition_lower or 'irritable bowel' in condition_lower:
-                            health_guidance += "- IBS: Suggest low-FODMAP options when relevant, easily digestible foods, and adequate fiber. Consider food triggers.\n"
-                        elif 'lactose' in condition_lower:
-                            health_guidance += "- LACTOSE INTOLERANCE: Avoid dairy suggestions or recommend lactose-free alternatives. Suggest calcium-rich non-dairy foods.\n"
-                        else:
-                            health_guidance += f"- {condition.upper()}: Consider dietary modifications appropriate for this condition.\n"
-                
-                user_context += goal_guidance + diet_guidance + health_guidance
-                user_context += "IMPORTANT: Always provide diet-specific suggestions even for healthy meals. Never say 'no improvements needed' if user has specific dietary preferences.\n"
+            user_context = _get_user_context(user_preferences)
 
             # 4. Rules & JSON contract (intelligent suggestions)
+            # 4. Rules & JSON contract (explicit health-aware guidance)
             contract = (
-                "Required JSON keys: recommendations[list(str)], health_score[int 0-100], meal_type[str one of "
-                "breakfast|lunch|dinner|snack|unknown], dietary_considerations[list(str)], meal_rating[int 0-10], "
-                "suggestions[list(str)], improvements[list(str)], positive_aspects[list(str)]."
-            )
+    "OUTPUT FORMAT (strict JSON): {\n"
+    "  'recommendations': [str],\n"
+    "  'health_score': int (0–100),\n"
+    "  'meal_type': str ('breakfast'|'lunch'|'dinner'|'snack'|'unknown'),\n"
+    "  'dietary_considerations': [str],\n"
+    "  'meal_rating': int (0–10),\n"
+    "  'suggestions': [str],\n"
+    "  'improvements': [str],\n"
+    "  'positive_aspects': [str]\n"
+    "}"
+)
+
             rules = (
-                "Rules:\n"
-                "1. Base feedback ONLY on provided macros (no guessing hidden nutrients).\n"
-                "2. health_score: holistic quality (higher = healthier).\n"
-                "3. meal_rating: palatability/overall quality 0–10.\n"
-                "4. SMART SUGGESTIONS: If meal is already healthy (good protein, reasonable calories, balanced macros), focus on POSITIVE reinforcement instead of nitpicking.\n"
-                "5. For healthy meals: Use 'positive_aspects' to praise good choices and 'suggestions' to encourage continuation rather than change.\n"
-                "6. Only suggest improvements if there are genuine nutritional concerns (very low protein, excessive calories, etc.).\n"
-                "7. Consider user goals: Don't suggest calorie increases for cutting goals or decreases for bulking goals.\n"
-                "8. CRITICAL: Always consider user's diet type (Vegan, Keto, etc.) and provide relevant suggestions even for healthy meals.\n"
-                "9. For specific diets: Vegan (suggest plant proteins, B12, iron sources), Keto (suggest low-carb alternatives), Mediterranean (suggest olive oil, fish).\n"
-                "10. HEALTH CONDITIONS: Always prioritize health condition guidance when present. For diabetes (low GI foods), hypertension (low sodium), heart disease (omega-3s, low sat fat), etc.\n"
-                "11. If user has health conditions, tailor ALL suggestions to support their medical needs - this takes priority over general nutrition advice.\n"
-                "12. No markdown, explanations, or extra keys — JSON ONLY.\n"
-                "13. All arrays must have at least 1 element; if nothing relevant, give encouraging entries.\n"
-            )
+    "EVALUATION RULES:\n"
+    "1. Use only the provided macros (calories, protein, carbs, fat).\n"
+    "2. health_score = overall nutritional quality (higher = better).\n"
+    "HEALTH SCORE CALIBRATION:\n"
+    "- 90-100 = excellent macro balance, nutrient dense, supports goal.\n"
+    "- 75-89 = good nutrition, minor improvements possible.\n"
+    "- 60-74 = fair but unbalanced.\n"
+    "- 40-59 = poor nutritional quality.\n"
+    "- <40 = very poor.\n"
+    "CONDITION-ADJUSTED SCORING:\n"
+    "- Score must reflect user health conditions.\n"
+    "- Diabetes: high sugar/simple carbs → <60; fiber/protein-balanced → 80-95.\n"
+    "- Hypertension: high sodium → <55; potassium-rich, low-sodium → 80-95.\n"
+    "- Heart/Cholesterol: sat-fat-heavy → <60; omega-3/high-fiber → 80-95.\n"
+    "- Kidney: excessive protein → <60; moderate protein, low sodium → 75-90.\n"
+    "- Celiac/Gluten: gluten present → 0; gluten-free → 80-95.\n"
+    "- Lactose intolerance: dairy → <60; lactose-free → 80-95.\n"
+    "- IBS: high-FODMAP → <60; low-FODMAP → 75-90.\n"
+    "- Multiple conditions: apply strictest applicable rule.\n"
+    "3. meal_rating = taste/appeal (0-10).\n"
+    "4. Reinforce good balance with 'positive_aspects'; avoid nitpicking healthy meals.\n"
+    "5. Suggest improvements only when macros or goals conflict.\n"
+
+    "6. HEALTH CONDITIONS HAVE HIGHEST PRIORITY. Always evaluate and filter suggestions through user conditions first.\n"
+    "   - If a meal conflicts with any health condition, assign health_score <50.\n"
+    "   - Never praise or label 'great' any meal that violates Keto, diabetic, or heart-healthy rules.\n"
+    "   - Provide clear improvement suggestions to make it compliant.\n"
+
+    "7. Respect goals:\n"
+    "   - Cutting → reduce calories, preserve satiety.\n"
+    "   - Bulking → increase calories, maintain high protein.\n"
+    "   - Maintenance/Balanced → moderate everything.\n"
+    "8. Respect diets strictly (Vegan, Keto, Mediterranean, etc.).\n"
+    "9. If multiple conditions exist, combine restrictions conservatively (never conflict).\n"
+    "10. Always fill every list with ≥1 element.\n"
+    "11. Output only valid JSON, no markdown or explanations."
+)
+
+
             examples = (
-                "Example health_score guidance: High protein & moderate calories => 70–85; very high sugar & low protein => 30–50.\n"
-                "Example for healthy meal (300 cal, 25g protein, balanced): suggestions=['Great protein content for muscle maintenance', 'Perfect portion size for a light meal'], improvements=[] (empty if no real issues).\n"
-                "Example for problematic meal (800 cal, 5g protein, 80g fat): suggestions=['Add lean protein source', 'Reduce portion size'], improvements=['Consider grilled chicken breast', 'Add vegetables for fiber'].\n"
-                "Example for vegan user with healthy meal: suggestions=['Excellent plant-based protein sources', 'Consider adding vitamin B12-rich foods like nutritional yeast'], improvements=['Add iron-rich foods like spinach or lentils'].\n"
-                "Example for keto user: suggestions=['Great low-carb choice', 'Perfect fat-to-protein ratio'], improvements=['Consider adding more healthy fats like avocado'].\n"
-                "Example for diabetic user: suggestions=['Good complex carbs for blood sugar management', 'High fiber content helps stabilize glucose'], improvements=['Consider pairing with protein to slow carb absorption'].\n"
-                "Example for hypertension user: suggestions=['Low sodium preparation is heart-healthy'], improvements=['Add potassium-rich foods like spinach or avocado', 'Consider herbs instead of salt for flavoring'].\n"
-            )
+    "EXAMPLES:\n"
+    "- Balanced (300 kcal, 25g protein): suggestions=['Good protein balance'], improvements=[], positive_aspects=['Healthy macros']\n"
+    "- High-fat (800 kcal, 5g protein): improvements=['Add lean protein','Add vegetables for fiber']\n"
+    "- Vegan: suggestions=['Excellent plant proteins'], improvements=['Add B12 source']\n"
+    "- Keto: suggestions=['Strong fat-to-protein ratio'], improvements=['Add avocado for healthy fats']\n"
+    "- Diabetic: suggestions=['Complex carbs aid glucose control'], improvements=['Pair with protein to slow absorption']\n"
+    "- Hypertension: suggestions=['Low sodium helps heart health'], improvements=['Add potassium-rich foods like spinach']\n"
+)
 
             prompt = (
-                f"Macro summary: {meal_summary}\n" +
-                user_context +
-                contract + "\n" + rules + examples +
-                "Return ONLY strict JSON with all required keys." 
-            )
+    f"You are an AI nutrition coach. Be factual, evidence-based, and concise.\n"
+    f"Analyze the following meal and user profile.\n\n"
+    f"Meal Macros: {meal_summary}\n"
+    f"{user_context}\n"
+    f"{contract}\n"
+    f"{rules}\n"
+    f"{examples}\n"
+    "Return ONLY valid JSON matching the schema above."
+)
+
 
             ts = datetime.utcnow().isoformat() + "Z"
             start = time.perf_counter()

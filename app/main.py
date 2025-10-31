@@ -1,9 +1,11 @@
+from app.database import get_db, UserPreferences
 import asyncio
 import json
 import logging
 import os
 import re
 from typing import Optional, Tuple, List, Dict, Any
+import hashlib
 
 import nest_asyncio
 import streamlit as st
@@ -407,65 +409,6 @@ def load_styles():
     except Exception as e:
       st.warning(f"Could not load styles.css: {e}")
 
-def render_meal_analysis(analysis_data):
-    if analysis_data["status"] == "error":
-        st.error(f"Analysis failed: {analysis_data['error']}")
-        return
-    with st.container():
-        st.title("🍽️ Meal Analysis")
-        meal = analysis_data["meal_info"]
-        st.success(f"📸 Analyzed: {meal['name']} ({meal['confidence']:.1f}% confidence)")
-    with st.container():
-
-        col1, col2 = st.columns([2, 3])
-        with col1:
-            nutrition = analysis_data["nutrition_summary"]
-            st.metric(
-                "Total Calories",
-                f"{nutrition['calories']['value']} kcal",
-                f"{nutrition['calories']['daily_value']}% DV"
-            )
-            st.caption(f"Serving: {meal['serving_size']}")
-        with col2:
-            if nutrition["diet_tags"]:
-                tags_html = " ".join([
-                    f'<span class="nutrient-tag">{tag}</span>'
-                    for tag in nutrition["diet_tags"]
-                ])
-                st.markdown(f"<div style='margin-top: 0.5rem'>{tags_html}</div>", unsafe_allow_html=True)
-    insights = analysis_data["ai_insights"]
-    with st.container():
-        st.markdown("### 🤖 AI Insights")
-        score_color = "green" if insights["health_score"] >= 80 else "orange" if insights["health_score"] >= 60 else "red"
-        st.markdown(f"**Health Score:** <span style='color: {score_color}'>{insights['health_score']}/100</span>", unsafe_allow_html=True)
-        suggestions = analysis_data.get("suggestions") or insights.get("suggestions", [])
-        for suggestion in suggestions:
-            st.markdown(suggestion)
-        if insights["dietary_considerations"]:
-            with st.expander("📋 Dietary Considerations"):
-                for consideration in insights["dietary_considerations"]:
-                    st.markdown(f"• {consideration}")
-    with st.container():
-        st.markdown("### 📊 Nutrition Breakdown")
-        macro_cols = st.columns(3)
-        macros = nutrition["macros"]
-        with macro_cols[0]:
-            st.metric("Protein", f"{macros['protein']['value']:.1f}g", f"{macros['protein']['daily_value']}% DV")
-        with macro_cols[1]:
-            st.metric("Carbs", f"{macros['carbs']['value']:.1f}g", f"{macros['carbs']['daily_value']}% DV")
-        with macro_cols[2]:
-            st.metric("Fat", f"{macros['fat']['value']:.1f}g", f"{macros['fat']['daily_value']}% DV")
-    if analysis_data["components"]:
-        st.markdown("### 🍱 Meal Components")
-        for item in analysis_data["components"]:
-            with st.expander(f"{item['name']} ({item['type']})"):
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.metric("Calories", f"{item['nutrition']['calories']} kcal")
-                    st.metric("Protein", f"{item['nutrition']['protein']:.1f}g")
-                with col2:
-                    st.metric("Carbs", f"{item['nutrition']['carbs']:.1f}g")
-                    st.metric("Fat", f"{item['nutrition']['fat']:.1f}g")
 
 def theme_toggle():
     if 'theme' not in st.session_state:
@@ -492,7 +435,33 @@ def theme_toggle():
 
 def init_preferences():
     if 'prefs' not in st.session_state:
-        st.session_state.prefs = {'goal': 'Balanced', 'diet': 'None', 'health_conditions': [], 'calorie_target': 2500}
+        user_id = None
+        if 'user_id' in st.session_state:
+            user_id = st.session_state.user_id
+        else:
+            try:
+                from app.auth import get_current_user_id
+                user_id = get_current_user_id()
+            except Exception:
+                user_id = None
+        st.session_state.prefs = fetch_user_preferences(user_id)
+def fetch_user_preferences(user_id):
+    """Fetch user preferences from DB, fallback to defaults if not found."""
+    db = get_db()
+    prefs = {'goal': 'Balanced', 'diet': 'None', 'health_conditions': [], 'calorie_target': 2500}
+    if user_id:
+        try:
+            pref_obj = db.query(UserPreferences).filter_by(user_id=user_id).first()
+            if pref_obj:
+                prefs = {
+                    'goal': pref_obj.goal,
+                    'diet': pref_obj.diet_type,
+                    'health_conditions': pref_obj.health_conditions or [],
+                    'calorie_target': pref_obj.calorie_target
+                }
+        except Exception as e:
+            pass
+    return prefs
     st.markdown(
         """
         <script>
@@ -527,7 +496,20 @@ def preferences_sidebar():
             cal_val = int(cal) if cal.strip() else None
         except Exception:
             pass
+        # Update session state
         st.session_state.prefs.update({'goal': goal, 'diet': diet, 'health_conditions': health_conditions, 'calorie_target': cal_val})
+        # Sync to DB
+        user_id = None
+        if 'user_id' in st.session_state:
+            user_id = st.session_state.user_id
+        else:
+            try:
+                from app.auth import get_current_user_id
+                user_id = get_current_user_id()
+            except Exception:
+                user_id = None
+        if user_id:
+            save_user_preferences(user_id, st.session_state.prefs)
         st.markdown(
             f"""
             <script>
@@ -539,6 +521,21 @@ def preferences_sidebar():
             """,
             unsafe_allow_html=True,
         )
+def save_user_preferences(user_id, prefs):
+    """Save user preferences to DB."""
+    db = get_db()
+    try:
+        pref_obj = db.query(UserPreferences).filter_by(user_id=user_id).first()
+        if not pref_obj:
+            pref_obj = UserPreferences(user_id=user_id)
+            db.add(pref_obj)
+        pref_obj.goal = prefs.get('goal', 'Balanced')
+        pref_obj.diet_type = prefs.get('diet', 'None')
+        pref_obj.health_conditions = prefs.get('health_conditions', [])
+        pref_obj.calorie_target = prefs.get('calorie_target', 2500)
+        db.commit()
+    except Exception as e:
+        db.rollback()
 
 def _load_demo_from_json(path: str) -> Tuple[Dict[str, Any], Dict[str, Any], List[str]]:
     try:
@@ -573,8 +570,80 @@ def _load_demo_from_json(path: str) -> Tuple[Dict[str, Any], Dict[str, Any], Lis
         return {"dish_name": "Demo Meal", "confidence": 0.9}, fallback, ["Add a side of veggies for fiber."]
 
 
+def _adjust_nutrition_for_portion(nutrition: Dict[str, Any], portion_consumed: float) -> Dict[str, Any]:
+    """Adjust nutrition values based on portion consumed"""
+    if portion_consumed == 1.0:
+        return nutrition
+
+    adjusted = nutrition.copy()
+
+    # Adjust nutrition summary
+    if "nutrition_summary" in adjusted:
+        summary = adjusted["nutrition_summary"]
+
+        # Adjust macros
+        if "macros" in summary:
+            for macro in summary["macros"]:
+                if "value" in summary["macros"][macro]:
+                    summary["macros"][macro]["value"] *= portion_consumed
+                if "daily_value" in summary["macros"][macro]:
+                    summary["macros"][macro]["daily_value"] *= portion_consumed
+
+        # Adjust additional nutrients
+        if "additional" in summary:
+            for nutrient in summary["additional"]:
+                if "value" in summary["additional"][nutrient]:
+                    summary["additional"][nutrient]["value"] *= portion_consumed
+                if "daily_value" in summary["additional"][nutrient]:
+                    summary["additional"][nutrient]["daily_value"] *= portion_consumed
+
+    # Calculate original total calories from components
+    original_total_calories = 0
+    if "components" in adjusted:
+        for component in adjusted["components"]:
+            if "nutrition" in component:
+                original_total_calories += component["nutrition"].get("calories", 0)
+        # Now adjust each component's nutrition by portion
+        for component in adjusted["components"]:
+            if "nutrition" in component:
+                for nutrient, value in component["nutrition"].items():
+                    if isinstance(value, (int, float)):
+                        component["nutrition"][nutrient] = value * portion_consumed
+
+    # Set nutrition_summary calories to total calories for portion consumed
+    if "nutrition_summary" in adjusted and "calories" in adjusted["nutrition_summary"]:
+        adjusted["nutrition_summary"]["calories"]["value"] = original_total_calories * portion_consumed
+        # Optionally adjust daily_value as well (if desired)
+        # adjusted["nutrition_summary"]["calories"]["daily_value"] *= portion_consumed
+
+    return adjusted
+
+
 def main():
     st.set_page_config(page_title="🍽️ Smart Dish Analyzer", page_icon="🍽️", layout="centered")
+    
+    # Import authentication functions
+    from app.auth import is_authenticated, get_current_user_id, get_current_username
+    from app.meal_tracking import MealTrackingService
+    from app.database import init_database
+    
+    # Initialize database
+    try:
+        init_database()
+    except Exception as e:
+        st.error(f"Database initialization failed: {e}")
+        logger.error(f"Database initialization error: {e}")
+        return
+    
+    # Check authentication
+    if not is_authenticated():
+        st.warning("Please login to use FitPlate AI")
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            if st.button("🔐 Go to Login", type="primary", use_container_width=True):
+                st.switch_page("pages/1_Login.py")
+        return
+    
     load_styles()
     init_preferences()
     preferences_sidebar()
@@ -584,10 +653,15 @@ def main():
     # Demo mode toggle and JSON path
     demo_default = bool(os.getenv('UX_DEMO') or os.getenv('UX_DATA_JSON'))
     with st.sidebar:
+        # Hide login if already authenticated
+        from app.auth import is_authenticated
+        if not is_authenticated():
+            st.markdown("### 🔐 Login")
+            if st.button("Go to Login", use_container_width=True):
+                st.switch_page("pages/1_Login.py")
         st.markdown("### 🧪 Demo Mode")
         demo_mode = st.toggle("Run without API (JSON)", value=demo_default)
         json_path = st.text_input("Demo JSON path", value=os.getenv('UX_DATA_JSON', 'data/demo_meal.json')) if demo_mode else None
-        
         st.markdown("### ⚡ Speed Settings")
         speed_mode = st.toggle("Fast Mode (Faster analysis, less detail)", value=True)
         if speed_mode:
@@ -674,40 +748,32 @@ def main():
         # Initialize variables
         dish = None
         nutrition = None
+        ai_insights = None
         suggestions = []
-        
+
         if cache_key in st.session_state.analysis_cache:
-            # Use cached results (including suggestions that match current preferences)
             cached_data = st.session_state.analysis_cache[cache_key]
             dish = cached_data['dish']
             nutrition = cached_data['nutrition']
-            suggestions = cached_data['suggestions']
+            ai_insights = cached_data.get('ai_insights')
+            suggestions = cached_data.get('suggestions', [])
         elif image_hash in [k.split('_')[0] for k in st.session_state.analysis_cache.keys()]:
-            # We have analysis for this image but with different preferences
-            # Reuse analysis but regenerate suggestions
             for key, cached_data in st.session_state.analysis_cache.items():
                 if key.startswith(image_hash):
                     dish = cached_data['dish']
                     nutrition = cached_data['nutrition']
+                    ai_insights = cached_data.get('ai_insights')
+                    suggestions = cached_data.get('suggestions', [])
                     break
-            
-            # Generate new suggestions with current preferences
-            if not demo_mode and nutrition is not None:
-                with st.spinner("Updating suggestions for your preferences..."):
-                    if analyzer is not None:
-                        suggestions = safe_run_async(analyzer.suggest_improvements(nutrition, st.session_state.prefs))
-                    else:
-                        suggestions = []
-            
-            # Cache the new combination
+            # Do NOT call APIs again; just cache with new key if needed
             if dish is not None and nutrition is not None:
                 st.session_state.analysis_cache[cache_key] = {
                     'dish': dish,
                     'nutrition': nutrition,
+                    'ai_insights': ai_insights,
                     'suggestions': suggestions
                 }
         else:
-            # Perform analysis and cache results
             loading_placeholder = st.empty()
             with loading_placeholder.container():
                 st.markdown('<div class="progress-line"><div class="bar"></div></div>', unsafe_allow_html=True)
@@ -717,6 +783,7 @@ def main():
                 with st.spinner("Loading demo analysis..."):
                     if json_path is not None:
                         dish, nutrition, suggestions = _load_demo_from_json(json_path)
+                        ai_insights = None
                     else:
                         st.error("Demo JSON path not provided")
                         return
@@ -727,24 +794,19 @@ def main():
                     else:
                         st.error("Analyzer not initialized")
                         return
-            loading_placeholder.empty()
-            
-            # Get AI suggestions (API) or use demo suggestions
-            suggestions = []  # Initialize suggestions
-            if demo_mode:
-                # suggestions should be set from demo data above
-                pass
-            else:
-                with st.spinner("Getting personalized suggestions..."):
+                with st.spinner("Getting full AI insights..."):
                     if analyzer is not None:
-                        suggestions = safe_run_async(analyzer.suggest_improvements(nutrition, st.session_state.prefs))
+                        full_recommendations = safe_run_async(analyzer._get_recommendations(nutrition, st.session_state.prefs))
+                        ai_insights = full_recommendations
+                        suggestions = full_recommendations.get('suggestions', [])
                     else:
+                        ai_insights = None
                         suggestions = []
-            
-            # Cache the results including suggestions with the preference-aware cache key
+            loading_placeholder.empty()
             st.session_state.analysis_cache[cache_key] = {
                 'dish': dish,
                 'nutrition': nutrition,
+                'ai_insights': ai_insights,
                 'suggestions': suggestions
             }
         
@@ -773,6 +835,10 @@ def main():
             st.error("⚠️ Could not analyze dish information")
             return
         
+        # Merge ai_insights into nutrition if available
+        if ai_insights:
+            nutrition['ai_insights'] = ai_insights
+
         # Prepare common values for the left info column
         nutrition_summary = nutrition["nutrition_summary"]
         meal_info = nutrition.get("meal_info", {})
@@ -786,49 +852,21 @@ def main():
             # Move the information to the left, image on the right
             col_info, col_img = st.columns([2, 3])
             with col_info:
-                # Minimal inline style for modern chips
-                st.markdown(
-                    """
-                    <style>
-                      .chips{display:flex;flex-wrap:wrap;gap:.5rem;margin:.25rem 0 1rem;}
-                      .chip{display:inline-flex;align-items:center;padding:.35rem .6rem;border-radius:999px;font-size:0.85rem;border:1px solid rgba(0,0,0,.08);}
-                      .chip-warn{background:rgba(255, 59, 48, .08); border-color: rgba(255,59,48,.25);} /* red */
-                      .chip-sugg{background:rgba(52, 199, 89, .08); border-color: rgba(52,199,89,.25);} /* green */
-                      .chip .ico{margin-right:.4rem}
-                      .section-title{font-weight:600;margin:0 0 .5rem 0;display:flex;align-items:center;gap:.5rem;}
-                      .meal-title-row{display:flex;align-items:center;justify-content:space-between;gap:.75rem}
-                      .meal-title{font-size:1.2rem;font-weight:800;display:flex;align-items:center;gap:.5rem}
-                      .meal-badge{border-radius:999px;padding:.25rem .6rem;background:rgba(99,102,241,.12);border:1px solid rgba(99,102,241,.25);font-weight:700}
-                      .meal-meta{display:flex;gap:1rem;color:rgba(0,0,0,.7);font-size:.92rem;margin-top:.35rem}
-                      .diet-chips{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.5rem}
-                      .diet-chip{background:rgba(0,0,0,.06);border:1px solid rgba(0,0,0,.08);border-radius:999px;padding:.25rem .55rem;font-size:.8rem}
-                                            /* Professional spacing and stat card */
-                                            .section-space{margin-top:1rem}
-                                            .section-space-lg{margin-top:1.25rem}
-                                            .stat-card{margin-top:1rem;padding:1rem;border-radius:14px;background:linear-gradient(180deg, rgba(99,102,241,.10), rgba(99,102,241,.04));border:1px solid rgba(99,102,241,.25);box-shadow:0 2px 12px rgba(0,0,0,.06)}
-                                            .stat-label{font-size:.8rem;color:rgba(0,0,0,.6);letter-spacing:.02em}
-                                            .stat-value{font-size:2rem;font-weight:900;display:flex;align-items:baseline;gap:.35rem;margin:.35rem 0}
-                                            .stat-value span{font-size:1rem;color:rgba(0,0,0,.65);font-weight:600}
-                                            .stat-meter{height:8px;background:rgba(0,0,0,.08);border-radius:8px;overflow:hidden;margin-top:.25rem}
-                                            .stat-meter .fill{height:100%;background:linear-gradient(90deg, #6366F1, #22D3EE);}
-                                            .stat-sub{font-size:.85rem;color:rgba(0,0,0,.65);margin-top:.45rem}
-                                            /* Card container for stacked sections */
-                                            .ui-card{background:rgba(255,255,255,.85);backdrop-filter:saturate(180%) blur(6px);border:1px solid rgba(0,0,0,.08);border-radius:16px;padding:1rem;box-shadow:0 6px 20px rgba(0,0,0,.06);margin-bottom:1rem}
-                                            .ui-card-title{font-weight:750;display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem;font-size:1rem}
-                    </style>
-                    """,
-                    unsafe_allow_html=True,
-                )
+                # Use only unified classes from styles.css
 
-                # Simplified meal card - just name, confidence, and calorie bar
-                cal_val = nutrition_summary["calories"]["value"]
+                # Meal card - total calories is sum of all components
+                components_list = nutrition.get("components", [])
+                total_calories = sum(
+                    c.get("nutrition", {}).get("calories", 0)
+                    for c in components_list
+                )
                 cal_dv = nutrition_summary["calories"]["daily_value"]
                 title_html = f"<div class='meal-title-row'><div class='meal-title'>{confidence_emoji} {dish['dish_name']}</div><span class='meal-badge'>{confidence:.1f}%</span></div>"
-                
+
                 meal_card_html = f"""
                     <div class='ui-card'>
                         {title_html}
-                        <div class='stat-value'>{cal_val} <span>kcal</span></div>
+                        <div class='stat-value'>{total_calories} <span>kcal</span></div>
                         <div class='stat-meter'><div class='fill' style='width:{cal_dv}%'></div></div>
                         <div class='stat-sub'>{cal_dv}% Daily Value</div>
                     </div>
@@ -858,17 +896,54 @@ def main():
                             return get_icon(keyword, "💡")
                     return get_icon("balanced", "💡")
 
-                # Show AI Suggestions and Warnings below the Dish info
+                # Show AI Suggestions, Diet Tags, Health Score, and Warnings below the Dish info
+                chips_html = ""
+                # Suggestions chips
                 if suggestions:
                     sugg_chips = [
                         f"<span class='chip chip-sugg'><span class='ico'>{_sugg_icon(s)}</span>{s}</span>"
                         for s in suggestions
                     ]
-                    st.markdown(
-                        f"<div class='chips'>{''.join(sugg_chips)}</div>",
-                        unsafe_allow_html=True,
-                    )
+                    chips_html += ''.join(sugg_chips)
 
+                # Diet tags chips
+                if diet_tags:
+                    tag_chips = [
+                        f"<span class='chip chip-tag'><span class='ico'>{get_icon(tag, get_icon('diet'))}</span>{tag.title()}</span>"
+                        for tag in diet_tags
+                    ]
+                    chips_html += ''.join(tag_chips)
+
+                # Health score chip with dynamic color
+                health_score = None
+                if nutrition and 'ai_insights' in nutrition and 'health_score' in nutrition['ai_insights']:
+                    health_score = nutrition['ai_insights']['health_score']
+                if health_score is not None:
+                    # Determine color and icon based on score
+                    try:
+                        score_val = float(health_score)
+                    except Exception:
+                        score_val = None
+                    if score_val is not None:
+                        if score_val >= 80:
+                            chip_color = "background: linear-gradient(135deg, #b9f6ca 0%, #43ea7a 100%) !important; border-color: #43ea7a !important; color: #1B5E20 !important;"
+                            heart_icon = "💚"
+                        elif score_val >= 50:
+                            chip_color = "background: linear-gradient(135deg, #fff59d 0%, #ffe082 100%) !important; border-color: #ffe082 !important; color: #795548 !important;"
+                            heart_icon = "💛"
+                        else:
+                            chip_color = "background: linear-gradient(135deg, #ff8a80 0%, #ff5252 100%) !important; border-color: #ff5252 !important; color: #fff !important;"
+                            heart_icon = "❤️"
+                    else:
+                        chip_color = ""
+                        heart_icon = "💚"
+                    chips_html += f"<span class='chip chip-health' style='{chip_color}'><span class='ico'>{heart_icon}</span>Health Score: {health_score}</span>"
+
+                # Render all chips together
+                if chips_html:
+                    st.markdown(f"<div class='chips'>{chips_html}</div>", unsafe_allow_html=True)
+
+                # Warnings chips
                 warn_list = nutrition_summary.get("warnings", [])
                 if warn_list:
                     warn_chips = [
@@ -881,28 +956,12 @@ def main():
                     )
 
             with col_img:
-                # Constrain image height for above-the-fold layout
-                st.markdown(
-                    """
-                    <style>
-                      .image-preview img{max-height:320px;object-fit:cover;border-radius:12px}
-                    </style>
-                    """,
-                    unsafe_allow_html=True,
-                )
                 st.image(image, caption="Your Dish", use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
 
         # Row: Left = Additional Nutrients, Right = Macronutrients (aligned with image width and equal height)
         with st.container():
-            st.markdown(
-                """
-                <style>
-                  .ui-card.eq{min-height:220px;display:flex;flex-direction:column}
-                </style>
-                """,
-                unsafe_allow_html=True,
-            )
+            # Use only unified classes from styles.css
             col_left, col_right = st.columns([2, 3])
             with col_left:
                 additional = nutrition_summary.get("additional", {})
@@ -958,6 +1017,89 @@ def main():
                     st.markdown('</div>', unsafe_allow_html=True)
         # Warnings and AI Suggestions are shown near the image above.
         
+        # Meal Confirmation Section - Improved UI
+        st.markdown('<hr/>', unsafe_allow_html=True)
+
+        user_id = get_current_user_id()
+        if not user_id:
+            st.error("User session invalid. Please login again.")
+            return
+
+        meal_key = f"meal_{cache_key}"
+        meal_confirmed = st.session_state.get(f"{meal_key}_confirmed", False)
+
+        with st.container():
+
+            if not meal_confirmed:
+                colA, colB = st.columns([2,1])
+                with colA:
+                    portion_options = {
+                        "100%": 1.0,
+                        "75%": 0.75,
+                        "50%": 0.5,
+                        "25%": 0.25,
+
+                    }
+                    portion_label = st.radio(
+                        "Select portion eaten",
+                        options=list(portion_options.keys()),
+                        index=0,
+                        key=f"{meal_key}_portion_radio"
+                    )
+                    portion_consumed = portion_options[portion_label]
+                with colB:
+                    confirm_meal = st.button(
+                        f"{get_icon('confirm', '✅')} Confirm Meal",
+                        type="primary",
+                        key=f"{meal_key}_confirm",
+                        help="Save this meal to your nutrition tracking"
+                    )
+                
+
+                if confirm_meal:
+                    try:
+                        import hashlib
+                        meal_info = nutrition.get("meal_info", {})
+                        meal_name = meal_info.get("name", dish.get("dish_name", "Unknown Meal"))
+                        components = nutrition.get("components", [])
+                        confidence = dish.get("confidence", 0.0)
+                        image_hash = hashlib.md5(selected_bytes).hexdigest()
+                        adjusted_nutrition = _adjust_nutrition_for_portion(nutrition, portion_consumed)
+                        health_score = None
+                        if nutrition and 'ai_insights' in nutrition and 'health_score' in nutrition['ai_insights']:
+                            health_score = nutrition['ai_insights']['health_score']
+                        meal = MealTrackingService.save_meal_analysis(
+                            user_id=user_id,
+                            meal_name=meal_name,
+                            nutrition_data=adjusted_nutrition,
+                            components=components,
+                            image_hash=image_hash,
+                            confidence_score=confidence,
+                            ai_suggestions=suggestions,
+                            health_score=health_score
+                        )
+                        if meal:
+                            success = MealTrackingService.confirm_meal(
+                                meal_id=meal.id,  # type: ignore
+                                user_id=user_id
+                            )
+                            if success:
+                                st.session_state[f"{meal_key}_confirmed"] = True
+                                st.session_state[f"{meal_key}_meal_id"] = meal.id
+                                st.success(f"{get_icon('success', '🎉')} Meal saved to your tracking system!")
+                                st.rerun()
+                            else:
+                                st.error("Error confirming meal")
+                        else:
+                            st.error("Error saving meal analysis")
+                    except Exception as e:
+                        st.error(f"Error saving meal: {str(e)}")
+                        logger.error(f"Error confirming meal: {e}")
+            else:
+                meal_id = st.session_state.get(f"{meal_key}_meal_id")
+                st.success(f"{get_icon('success', '✅')} This meal has been confirmed and added to your tracking!")
+            st.markdown("</div>", unsafe_allow_html=True)
+ 
         # Chat section - available only when API is enabled
         if nutrition and not demo_mode:
             st.markdown('<hr/>', unsafe_allow_html=True)
