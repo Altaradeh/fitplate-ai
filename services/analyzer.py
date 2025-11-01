@@ -183,8 +183,8 @@ class FoodAnalyzerService:
             result = {
                 "status": "success",
                 "meal_info": {
-                    "name": getattr(scene_analysis.items[0], "name", "Unknown Dish"),
-                    "confidence": getattr(scene_analysis.items[0], "confidence", 0.0),
+                    "name": scene_analysis.dish_name,
+                    "confidence": scene_analysis.dish_confidence,
                     "serving_size": nutrition.combined.serving_size,
                 },
                 "nutrition_summary": {
@@ -327,27 +327,55 @@ class FoodAnalyzerService:
     "9. Label unknowns as 'unknown <category>' if the class cannot be identified.\n"
     "10. Do not infer hidden ingredients (e.g., filling) unless clearly visible.\n"
     "11. If a food visually matches a well-known regional or common dish (e.g., pizza, knafeh) "
-    "with ≥ 0.7 confidence, name the dish directly instead of generic terms, but include the confidence score.\n"
+    "   - with ≥ 0.7 confidence, name the dish directly instead of generic terms, but include the confidence score.\n"
+    "12. After listing all items, infer one representative overall meal or dish name under key 'dish_name'\n"
+        "- If the plate has ≥3 distinct components (protein + vegetable + bread/starch or condiment), infer a composite name.\n"
+        "- Use regional or descriptive labels when appropriate:\n"
+        "* eggs + bacon + cheese + vegetables + bread → 'Balkan Breakfast Plate' or 'Mediterranean Breakfast Platter'\n"
+        "* rice + meat + vegetables → 'Protein Bowl' or 'Mixed Lunch Plate'\n"
+        "- Never choose a single ingredient (e.g., 'Sliced Tomato') as dish_name unless the entire photo truly shows only that item.\n"
+        "- Confidence for dish_name must be 0–1 like other items.\n"
+    "13. If only one food item is detected, evaluate the plate context and presentation. \n"
+    "   - If the image shows plating, garnish, or side items suggesting a complete meal, infer a composite or styled dish name (e.g., “Tomato Breakfast Plate,” “Vegetable Snack Plate,” “Appetizer Platter”). \n"
+    "   - Only keep a single-item name like “Sliced Tomato” if the entire image is clearly limited to that one item without any garnish, plate composition, or additional elements.\n"
 )
 
 
             examples = (
-                "Examples:\n"
-                "A: One bowl containing chicken, rice, avocado, egg, and beans ->\n"
-                "{'items':[{'name':'grilled chicken breast','quantity':'80 g','confidence':0.95},"
-                "{'name':'brown rice','quantity':'50 g','confidence':0.90},"
-                "{'name':'black beans','quantity':'40 g','confidence':0.92},"
-                "{'name':'boiled egg','quantity':'1 piece','confidence':0.98},"
-                "{'name':'avocado','quantity':'0.5 piece','confidence':0.95},"
-                "{'name':'mixed greens','quantity':'60 g','confidence':0.90},"
-                "{'name':'vinaigrette dressing','quantity':'20 g','confidence':0.85}]}\n"
-                "B: Water glass with lemon slice -> {'items':[{'name':'lemon water','quantity':'1 glass','confidence':0.95}]}\n"
-                "C: Red apple -> {'items':[{'name':'apple','quantity':'1 piece','confidence':0.98}]}\n"
-            )
+    "Examples:\n"
+    "A: One bowl containing chicken, rice, avocado, egg, and beans ->\n"
+    "{'dish_name': 'Protein Power Bowl', 'dish_confidence': 0.88, 'items': ["
+    "{'name':'grilled chicken breast','quantity':'≈80 g','confidence':0.95},"
+    "{'name':'brown rice','quantity':'≈50 g','confidence':0.90},"
+    "{'name':'black beans','quantity':'≈40 g','confidence':0.92},"
+    "{'name':'boiled egg','quantity':'1 piece ≈50 g','confidence':0.98},"
+    "{'name':'avocado','quantity':'0.5 piece ≈60 g','confidence':0.95},"
+    "{'name':'mixed greens','quantity':'≈60 g','confidence':0.90},"
+    "{'name':'vinaigrette dressing','quantity':'≈20 g','confidence':0.85}]}\n"
+
+    "B: Plate with egg, bacon, tomato, cucumber, feta, and bread with red pepper spread ->\n"
+    "{'dish_name': 'Balkan Breakfast Plate', 'dish_confidence': 0.87, 'items': ["
+    "{'name':'fried egg','quantity':'1 piece ≈70 g','confidence':0.97},"
+    "{'name':'bacon slices','quantity':'3 pieces ≈60 g','confidence':0.94},"
+    "{'name':'feta cheese','quantity':'≈40 g','confidence':0.92},"
+    "{'name':'tomato slices','quantity':'≈50 g','confidence':0.90},"
+    "{'name':'cucumber slices','quantity':'≈20 g','confidence':0.88},"
+    "{'name':'bread with red pepper spread','quantity':'1 slice ≈60 g','confidence':0.86}]}\n"
+
+    "C: Glass of water with lemon slice ->\n"
+    "{'dish_name': 'Lemon Water', 'dish_confidence': 0.95, 'items':["
+    "{'name':'lemon water','quantity':'1 glass ≈250 ml','confidence':0.95}]}\n"
+
+    "D: Single red apple ->\n"
+    "{'dish_name': 'Apple', 'dish_confidence': 0.98, 'items':["
+    "{'name':'apple','quantity':'1 piece ≈150 g','confidence':0.98}]}\n"
+)
+
             prompt = (
-                "Analyze this meal image. Provide structured JSON only.\n\n" +
-                rules + "\n" + examples +
-                "Schema (all required):" + schema_json
+                "Analyze this meal image. Always return a plausible, human-readable dish or meal name that could appear on a restaurant menu or in a food log. "
+            "Never return ingredient-only names unless absolutely certain the image depicts nothing else. Provide structured JSON only.\n\n"
+            + rules + "\n" + examples +
+            "Schema (all required):" + schema_json
             )
 
             # 6. Call model
@@ -364,7 +392,8 @@ class FoodAnalyzerService:
                         model=self.VISION_MODEL,
                         messages=[
                             {"role": "system", "content": (
-                                "You are a precise food recognition AI. Return ONLY valid JSON; no markdown; comply strictly with the provided schema."
+                                 "You are a precise food recognition AI. Return ONLY valid JSON; comply strictly with the provided schema. "
+                            "Always infer a composite dish name when the image shows multiple food types."
                             )},
                             {
                                 "role": "user",
@@ -399,14 +428,21 @@ class FoodAnalyzerService:
 
             raw = self._clean_ai_response(content)
             parsed = VisionAnalysisResponse.model_validate_json(raw, strict=True)
-            result = DishAnalysis(items=parsed.items)
-            
+            result = DishAnalysis(
+                dish_name=parsed.dish_name,
+                dish_confidence=parsed.dish_confidence,
+                items=parsed.items
+            )
             # Check if any items are of type 'unknown' and handle accordingly
             has_unknown = any(item.type == "unknown" for item in result.items)
             if has_unknown:
                 logger.warning("Non-food or unknown items detected in image")
                 # Return a clear indication that this is not a food item
-                return DishAnalysis(items=[VisionFoodItem(name="Non-Food Item Detected", type="unknown", quantity="N/A", confidence=0.0)])
+                return DishAnalysis(
+                    dish_name="Non-Food Item Detected",
+                    dish_confidence=0.0,
+                    items=[VisionFoodItem(name="Non-Food Item Detected", type="unknown", quantity="N/A", confidence=0.0)]
+                )
             
             self._vision_cache[cache_key] = result
 
@@ -416,7 +452,11 @@ class FoodAnalyzerService:
             return result
         except Exception as e:
             logger.error("Error in _analyze_image: %s", e, exc_info=True)
-            return DishAnalysis(items=[VisionFoodItem(name="Unidentified Food", type="unknown", quantity="N/A", confidence=0.0)])
+            return DishAnalysis(
+                dish_name="Unidentified Food",
+                dish_confidence=0.0,
+                items=[VisionFoodItem(name="Unidentified Food", type="unknown", quantity="N/A", confidence=0.0)]
+            )
 
     async def _analyze_nutrition(self, items: Sequence[FoodItemBase]) -> Optional[NutritionAnalysis]:
         try:

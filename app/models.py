@@ -41,6 +41,8 @@ class VisionFoodItem(FoodItemBase):
 
 class VisionAnalysisResponse(BaseModel):
     """Model for the complete vision analysis API response."""
+    dish_name: str = Field(..., description="Human-readable name for the overall dish or meal")
+    dish_confidence: float = Field(..., ge=0, le=1, description="Confidence score for the dish name")
     items: List[VisionFoodItem] = Field(..., description="List of detected food items")
 
     @model_validator(mode='after')
@@ -51,6 +53,10 @@ class VisionAnalysisResponse(BaseModel):
         for item in self.items:
             if item.confidence < 0.5:
                 logger.warning(f"Low confidence detection for {item.name}: {item.confidence}")
+        if not self.dish_name or not isinstance(self.dish_name, str):
+            raise ValueError("dish_name must be a non-empty string")
+        if not (0.0 <= self.dish_confidence <= 1.0):
+            raise ValueError("dish_confidence must be between 0 and 1")
         return self
 
 # Nutrition API Response Models
@@ -207,6 +213,8 @@ class FoodItemWithNutrition(FoodItemBase):
 
 class DishAnalysis(BaseModel):
     """Model for the dish analysis response."""
+    dish_name: str = Field(..., description="Human-readable name for the overall dish or meal")
+    dish_confidence: float = Field(..., ge=0, le=1, description="Confidence score for the dish name")
     items: List[VisionFoodItem] = Field(..., description="List of detected food items")
 
 class MealRecommendations(BaseModel):
