@@ -664,7 +664,7 @@ def main():
         demo_mode = st.toggle("Run without API (JSON)", value=demo_default)
         json_path = st.text_input("Demo JSON path", value=os.getenv('UX_DATA_JSON', 'data/demo_meal.json')) if demo_mode else None
         st.markdown("### ⚡ Speed Settings")
-        speed_mode = st.toggle("Fast Mode (Faster analysis, less detail)", value=False)
+        speed_mode = st.toggle("Fast Mode (Faster analysis, less detail)", value=True)
         if speed_mode:
             st.info("🚀 Fast mode: Reduced tokens, limited items, optimized prompts")
 
