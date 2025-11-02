@@ -1,17 +1,17 @@
 {
   "meal_rating": 4,
-  "health_score": 45,
+  "health_score": 30,
   "suggestions": [
-    "Consider using low-carb vegetables to enhance fiber content",
-    "Incorporate healthy fats like avocado or nuts"
+    "Consider using avocado or nuts for healthy fats",
+    "Incorporate leafy greens for added fiber"
   ],
   "improvements": [
-    "Significantly reduce carbohydrate content to meet keto requirements",
-    "Increase protein sources to improve satiety and support cutting goals"
+    "Reduce carbohydrate content significantly",
+    "Increase protein to at least 25g"
   ],
   "positive_aspects": [
     "Contains some healthy fats",
-    "Provides a moderate amount of protein"
+    "Moderate calorie count for a meal"
   ],
   "recommendations": [
     "General balanced meal advice."

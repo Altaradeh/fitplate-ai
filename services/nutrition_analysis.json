@@ -1,83 +1,32 @@
 {
   "items": [
     {
-      "name": "Cheeseburger",
+      "name": "Za'Atar Flatbread",
       "type": "main_dish",
       "nutrition": {
-        "calories": 500,
-        "serving_size": "1 piece ≈250 g",
-        "protein_g": 25.0,
-        "carbs_g": 40.0,
-        "fiber_g": 2.0,
-        "sugar_g": 8.0,
-        "fat_g": 30.0,
-        "saturated_fat_g": 15.0,
-        "category": "burger",
-        "diet_tags": [],
-        "warnings": []
-      }
-    },
-    {
-      "name": "French Fries",
-      "type": "side_dish",
-      "nutrition": {
-        "calories": 365,
-        "serving_size": "≈100 g",
-        "protein_g": 3.0,
-        "carbs_g": 63.0,
-        "fiber_g": 3.0,
-        "sugar_g": 0.5,
-        "fat_g": 17.0,
-        "saturated_fat_g": 2.5,
-        "category": "potato",
-        "diet_tags": [],
-        "warnings": []
-      }
-    },
-    {
-      "name": "Cola",
-      "type": "beverage",
-      "nutrition": {
-        "calories": 140,
-        "serving_size": "1 can ≈330 ml",
-        "protein_g": 0.0,
-        "carbs_g": 39.0,
-        "fiber_g": 0.0,
-        "sugar_g": 39.0,
-        "fat_g": 0.0,
-        "saturated_fat_g": 0.0,
-        "category": "soda",
-        "diet_tags": [],
-        "warnings": []
-      }
-    },
-    {
-      "name": "Ketchup Packet",
-      "type": "condiment",
-      "nutrition": {
-        "calories": 25,
-        "serving_size": "1 packet ≈10 g",
-        "protein_g": 0.0,
-        "carbs_g": 6.0,
-        "fiber_g": 0.0,
-        "sugar_g": 5.0,
-        "fat_g": 0.0,
-        "saturated_fat_g": 0.0,
-        "category": "condiment",
+        "calories": 400,
+        "serving_size": "2 pieces ≈150 g",
+        "protein_g": 10.0,
+        "carbs_g": 70.0,
+        "fiber_g": 6.0,
+        "sugar_g": 2.0,
+        "fat_g": 12.0,
+        "saturated_fat_g": 3.0,
+        "category": "main_dish",
         "diet_tags": [],
         "warnings": []
       }
     }
   ],
   "combined": {
-    "calories": 1030.0,
-    "serving_size": "1 piece ≈250 g",
-    "protein_g": 28.0,
-    "carbs_g": 148.0,
-    "fiber_g": 5.0,
-    "sugar_g": 52.5,
-    "fat_g": 47.0,
-    "saturated_fat_g": 17.5,
+    "calories": 400.0,
+    "serving_size": "2 pieces ≈150 g",
+    "protein_g": 10.0,
+    "carbs_g": 70.0,
+    "fiber_g": 6.0,
+    "sugar_g": 2.0,
+    "fat_g": 12.0,
+    "saturated_fat_g": 3.0,
     "category": "main_dish",
     "diet_tags": [],
     "warnings": []

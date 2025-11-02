@@ -1,8 +1,13 @@
+# Ensure project root is on sys.path so 'services' can be imported when run from different CWDs
+import os, sys as _sys
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in _sys.path:
+    _sys.path.insert(0, _ROOT)
 from app.database import get_db, UserPreferences
 import asyncio
 import json
 import logging
-import os
+
 import re
 from typing import Optional, Tuple, List, Dict, Any
 import hashlib
@@ -15,11 +20,7 @@ from PIL import Image
 import io
 import time
 
-# Ensure project root is on sys.path so 'services' can be imported when run from different CWDs
-import sys as _sys
-_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _ROOT not in _sys.path:
-    _sys.path.insert(0, _ROOT)
+
 
 from services.analyzer import FoodAnalyzerService
 
