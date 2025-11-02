@@ -498,11 +498,12 @@ class FoodAnalyzerService:
             ]
 
             # 2. Versioned cache key
-            prompt_version = "nutri_v3"  # bumped version after schema enforcement change
+            prompt_version = "nutri_v5"  # bumped version to force re-computation with summation
             key_material = json.dumps(payload, sort_keys=True, separators=(",", ":"))
             key_hash = hashlib.md5(key_material.encode()).hexdigest()
             cache_key = f"{prompt_version}:{key_hash}:{self.CHAT_MODEL}"
             if cache_key in self._nutrition_cache:
+                logger.info(f"[CACHE_HIT] Returning cached nutrition result for key: {cache_key[:50]}...")
                 return self._nutrition_cache[cache_key]
 
             # 3. Get minified schema
@@ -534,13 +535,14 @@ class FoodAnalyzerService:
                     "8. When multiple pieces are listed, scale totals accordingly.\n"
                     "9. Return ONLY JSON matching the NutritionAnalysisResponse schema.\n"
                     "10. Do not include commentary, markdown, or extra keys.\n"
+                    "11. Ensure the combined totals accurately sum the individual items.\n"
                 )
 
                 examples = (
                     "Examples:\n"
                     "Input: [{'name':'Knafeh','type':'main_dish','quantity':'1 piece ≈120 g'}]\n"
                     "Output:\n"
-                    "{'combined':{'Calories':420,'Serving_Size':'1 piece ≈120 g','Protein':10.0,'Carbs':45.0,'Fiber':1.2,'Sugar':30.0,'Fat':20.0,'Sat_Fat':10.0,'Category':'dessert','Diet_Tags':['vegetarian'],'Warnings':['high sugar','high fat']},"
+                    "{'combined':{'Calories':420,'Serving_Size':'1 piece ≈120 g','Protein':10.0,'Carbs':45.0,'Fiber':1.2,'Sugar':30.0,'Fat':20.0,'Sat_Fat':10.0,'Category':'dessert','Diet_Tags':['vegetarian','high sugar','high fat'],'Warnings':['high sugar','high fat']},"
                     "'items':[{'name':'Knafeh','type':'main_dish','Calories':420,'Serving_Size':'1 piece ≈120 g','Protein':10.0,'Carbs':45.0,'Fiber':1.2,'Sugar':30.0,'Fat':20.0,'Sat_Fat':10.0,'Category':'dessert','Diet_Tags':['vegetarian'],'Warnings':['high sugar','high fat'],'quantity':'1 piece'}]}"
                 )
 
@@ -644,8 +646,52 @@ class FoodAnalyzerService:
                     raise validation_error
                     
             result = parsed.to_nutrition_analysis()
+            # --- Post-process: Ensure combined fields are sum of items ---
+            if result and hasattr(result, "items") and hasattr(result, "combined"):
+                logger.info("[SUMMATION] Starting post-processing summation")
+                items_list = result.items
+                combined = result.combined
+                sum_fields = [
+                    ("calories", "calories"),
+                    ("protein_g", "protein_g"),
+                    ("carbs_g", "carbs_g"),
+                    ("fiber_g", "fiber_g"),
+                    ("sugar_g", "sugar_g"),
+                    ("fat_g", "fat_g"),
+                    ("saturated_fat_g", "saturated_fat_g"),
+                ]
+                sums = {f_comb: 0.0 for f_comb, _ in sum_fields}
+                for item in items_list:
+                    nutr = getattr(item, "nutrition", None)
+                    if nutr:
+                        for f_comb, f_item in sum_fields:
+                            val = getattr(nutr, f_item, 0.0)
+                            if val is not None:
+                                sums[f_comb] += float(val)
+                logger.info(f"[SUMMATION] Computed sums: {sums}")
+                logger.info(f"[SUMMATION] Original combined.calories: {combined.calories}")
+                # Overwrite combined fields with the correct sums
+                for f_comb in sums:
+                    setattr(combined, f_comb, round(sums[f_comb], 2))
+                logger.info(f"[SUMMATION] Updated combined.calories: {combined.calories}")
+            else:
+                logger.warning("[SUMMATION] Skipped - result structure invalid")
             self._nutrition_cache[cache_key] = result
-
+            import os,json as json_module
+            output_dir = os.path.dirname(os.path.abspath(__file__))
+            output_path = os.path.join(output_dir, "nutrition_analysis.json")
+            with open(output_path, "w", encoding="utf-8") as f:
+                def serialize(obj):
+                    if hasattr(obj, "to_dict"):
+                        return obj.to_dict()
+                    elif hasattr(obj, "__dict__"):
+                        return {k: serialize(v) for k, v in obj.__dict__.items()}
+                    elif isinstance(obj, list):
+                        return [serialize(i) for i in obj]
+                    else:
+                        return obj
+                json_module.dump(serialize(result), f, ensure_ascii=False, indent=2)
+            logger.info(f"Nutrition analysis saved to {output_path}")
             logger.info(
                 "[OpenAI][END] step=nutrition dur_ms=%d hash=%s items=%d",
                 duration_ms, cache_key, len(result.items if hasattr(result, "items") else []),

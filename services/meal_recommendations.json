@@ -1,18 +1,17 @@
 {
-  "meal_rating": 5,
-  "health_score": 50,
+  "meal_rating": 4,
+  "health_score": 45,
   "suggestions": [
-    "Consider using healthier fat sources like olive oil",
-    "Explore lean protein options to meet dietary needs"
+    "Consider using low-carb vegetables to enhance fiber content",
+    "Incorporate healthy fats like avocado or nuts"
   ],
   "improvements": [
-    "Lower fat content to meet cutting goals",
-    "Increase protein to at least 40g for better satiety",
-    "Replace high-carb ingredients with low-carb vegetables"
+    "Significantly reduce carbohydrate content to meet keto requirements",
+    "Increase protein sources to improve satiety and support cutting goals"
   ],
   "positive_aspects": [
-    "Contains some protein",
-    "Provides a significant calorie contribution"
+    "Contains some healthy fats",
+    "Provides a moderate amount of protein"
   ],
   "recommendations": [
     "General balanced meal advice."

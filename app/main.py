@@ -663,7 +663,7 @@ def main():
         demo_mode = st.toggle("Run without API (JSON)", value=demo_default)
         json_path = st.text_input("Demo JSON path", value=os.getenv('UX_DATA_JSON', 'data/demo_meal.json')) if demo_mode else None
         st.markdown("### ⚡ Speed Settings")
-        speed_mode = st.toggle("Fast Mode (Faster analysis, less detail)", value=True)
+        speed_mode = st.toggle("Fast Mode (Faster analysis, less detail)", value=False)
         if speed_mode:
             st.info("🚀 Fast mode: Reduced tokens, limited items, optimized prompts")
 
@@ -737,9 +737,11 @@ def main():
         image_hash = hashlib.md5(selected_bytes).hexdigest()
         
         # Create preferences hash to invalidate suggestions when preferences change
+        # Cache version: increment when backend analysis logic changes
+        CACHE_VERSION = "v5"  # bumped for summation fix
         prefs_str = json.dumps(st.session_state.prefs, sort_keys=True)
         prefs_hash = hashlib.md5(prefs_str.encode()).hexdigest()
-        cache_key = f"{image_hash}_{prefs_hash}"
+        cache_key = f"{CACHE_VERSION}_{image_hash}_{prefs_hash}"
         
         # Check if we already have results for this image + preferences combination
         if 'analysis_cache' not in st.session_state:
