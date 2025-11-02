@@ -615,6 +615,7 @@ class FoodAnalyzerService:
                     logger.warning("Adding missing Category fields for fast mode compatibility")
                     # Parse as dict and add missing categories
                     import json as json_module
+                    
                     data = json_module.loads(raw)
                     
                     # Add Category to combined if missing
@@ -724,7 +725,7 @@ class FoodAnalyzerService:
             )
 
             # 2. Versioned cache key for recommendations (coarse granularity by macro quartet)
-            prompt_version = "rec_v4"  # bumped to v4 for enhanced diet-specific suggestions
+            prompt_version = "rec_v6"  # bumped to v6 for enhanced diet-specific suggestions
             key_material = json.dumps({
                 "calories": combined.calories,
                 "protein_g": combined.protein_g,
@@ -747,10 +748,10 @@ class FoodAnalyzerService:
             contract = (
     "OUTPUT FORMAT (strict JSON): {\n"
     "  'recommendations': [str],\n"
-    "  'health_score': int (0–100),\n"
+    "  'health_score': int (0-100),\n"
     "  'meal_type': str ('breakfast'|'lunch'|'dinner'|'snack'|'unknown'),\n"
     "  'dietary_considerations': [str],\n"
-    "  'meal_rating': int (0–10),\n"
+    "  'meal_rating': int (0-10),\n"
     "  'suggestions': [str],\n"
     "  'improvements': [str],\n"
     "  'positive_aspects': [str]\n"
@@ -759,53 +760,115 @@ class FoodAnalyzerService:
 
             rules = (
     "EVALUATION RULES:\n"
-    "1. Use only the provided macros (calories, protein, carbs, fat).\n"
-    "2. health_score = overall nutritional quality (higher = better).\n"
-    "HEALTH SCORE CALIBRATION:\n"
-    "- 90-100 = excellent macro balance, nutrient dense, supports goal.\n"
-    "- 75-89 = good nutrition, minor improvements possible.\n"
-    "- 60-74 = fair but unbalanced.\n"
-    "- 40-59 = poor nutritional quality.\n"
-    "- <40 = very poor.\n"
-    "CONDITION-ADJUSTED SCORING:\n"
-    "- Score must reflect user health conditions.\n"
-    "- Diabetes: high sugar/simple carbs → <60; fiber/protein-balanced → 80-95.\n"
-    "- Hypertension: high sodium → <55; potassium-rich, low-sodium → 80-95.\n"
-    "- Heart/Cholesterol: sat-fat-heavy → <60; omega-3/high-fiber → 80-95.\n"
-    "- Kidney: excessive protein → <60; moderate protein, low sodium → 75-90.\n"
-    "- Celiac/Gluten: gluten present → 0; gluten-free → 80-95.\n"
-    "- Lactose intolerance: dairy → <60; lactose-free → 80-95.\n"
-    "- IBS: high-FODMAP → <60; low-FODMAP → 75-90.\n"
-    "- Multiple conditions: apply strictest applicable rule.\n"
-    "3. meal_rating = taste/appeal (0-10).\n"
-    "4. Reinforce good balance with 'positive_aspects'; avoid nitpicking healthy meals.\n"
-    "5. Suggest improvements only when macros or goals conflict.\n"
+    "1. Use the given macros (calories, protein, carbs, fat) and user profile to assess health impact.\n"
+    "2. health_score = 0-100. Represents nutritional suitability for the user's health conditions and goals.\n"
+    "   - 90-100: Excellent and aligned with user conditions/goals.\n"
+    "   - 75-89: Good balance; minor adjustments possible.\n"
+    "   - 60-74: Fair; needs improvement or unbalanced macros.\n"
+    "   - 40-59: Poor; conflicts with user goals or partial condition risk.\n"
+    "   - <40: Very poor; contradicts major condition or diet rule.\n\n"
 
-    "6. HEALTH CONDITIONS HAVE HIGHEST PRIORITY. Always evaluate and filter suggestions through user conditions first.\n"
-    "   - If a meal conflicts with any health condition, assign health_score <50.\n"
-    "   - Never praise or label 'great' any meal that violates Keto, diabetic, or heart-healthy rules.\n"
-    "   - Provide clear improvement suggestions to make it compliant.\n"
+    "CONDITION-SPECIFIC LOGIC:\n"
+    "- Diabetes → Penalize sugar/refined carbs; reward high-fiber, lean protein meals.\n"
+    "- Hypertension → Penalize sodium-heavy foods; reward potassium-rich, fresh foods.\n"
+    "- High Cholesterol / Heart → Penalize fried, creamy, or yolk-heavy; reward greens, avocado, olive oil, lean protein.\n"
+    "- Kidney → Penalize high protein (>35%); reward moderate protein, low sodium.\n"
+    "- Celiac → Gluten present = 0; gluten-free = 85+.\n"
+    "- Lactose intolerance → Dairy present = <60.\n"
+    "- IBS → Penalize high FODMAP foods (beans, onions, garlic, apples).\n"
+    "- Multiple conditions → Apply strictest rule. Never praise conflict meals.\n\n"
 
-    "7. Respect goals:\n"
-    "   - Cutting → reduce calories, preserve satiety.\n"
-    "   - Bulking → increase calories, maintain high protein.\n"
-    "   - Maintenance/Balanced → moderate everything.\n"
-    "8. Respect diets strictly (Vegan, Keto, Mediterranean, etc.).\n"
-    "9. If multiple conditions exist, combine restrictions conservatively (never conflict).\n"
-    "10. Always fill every list with ≥1 element.\n"
-    "11. Output only valid JSON, no markdown or explanations."
+    "GOAL ADJUSTMENTS:\n"
+    "- Bulking → Reward calorie surplus with balanced macros, emphasize protein + healthy fats.\n"
+    "- Cutting → Penalize high fat or calorie excess; reward satiety with lean protein and fiber.\n"
+    "- Keto → Penalize carbs >10-15%; reward high fat/protein ratio.\n"
+    "- Maintenance → Moderate scoring; prioritize balance.\n\n"
+
+    "MEAL RATING (0-10):\n"
+    "- Taste/appeal, not health. Healthy but bland = lower rating.\n\n"
+
+    "OUTPUT LOGIC:\n"
+    "1. 'suggestions' = qualitative tips that reinforce strengths.\n"
+    "2. 'improvements' = actionable health/diet corrections.\n"
+    "3. 'positive_aspects' = reinforce compliance with goals/conditions.\n"
+    "4. Always populate each list with at least one clear entry.\n"
+    "5. Avoid contradictions (never call high-fat fried food 'heart-healthy').\n"
+    "6. Never output markdown, prose, or explanations—strict JSON only."
 )
 
+            food_context_rules = (
+    "FOOD CONTEXT RULES:\n"
+    "1. Assess food quality from visible or inferred macros: protein, carbs, fats.\n"
+    "2. Evaluate preparation method impact (fried vs. grilled, processed vs. whole).\n"
+    "3. Penalize ultra-processed, deep-fried, or sugary foods even if macros appear balanced.\n"
+    "4. Reward fresh, whole, or nutrient-dense components (vegetables, legumes, nuts, lean protein).\n"
+    "5. If fried or breaded foods dominate, health_score ≤60 unless clearly air-fried or baked.\n"
+    "6. Always infer likely sodium and fat impact from preparation style.\n"
+    "7. Reward fiber presence (vegetables, seeds, whole grains) — improves digestion, satiety, and heart health.\n"
+    "8. Penalize missing vegetables or fiber sources.\n"
+    "9. Always consider portion realism — large fried servings reduce health_score sharply.\n"
+    "10. Link context-specific scoring to user goals and health conditions as defined in CONTEXT INTERPRETATION FRAMEWORK.\n"
+)
+            context_rules = (
+    "CONTEXT INTERPRETATION FRAMEWORK:\n"
+    "1. GOAL ADJUSTMENT:\n"
+    "   - Bulking → prioritize calorie surplus and protein; penalize low energy meals.\n"
+    "   - Cutting → prioritize calorie deficit, high satiety (fiber, protein), low sugar/fat.\n"
+    "   - Balanced → even macros and moderate calories = ideal.\n"
+    "   - Maintenance → aim for overall macro balance and nutrient density.\n"
+    "2. DIET ENFORCEMENT:\n"
+    "   - Keto → total carbs must be very low; any bread, rice, potato, or wrap = not compliant (score ≤45).\n"
+    "   - Vegan → exclude all animal products; dairy, meat, eggs = violations (score ≤40).\n"
+    "   - Vegetarian → exclude meat/fish but allow dairy/eggs.\n"
+    "   - Mediterranean → emphasize olive oil, vegetables, fish, legumes; penalize processed meats.\n"
+    "3. HEALTH CONDITION PRIORITY (apply strictest rule):\n"
+    "   - Diabetes → avoid simple carbs and fried starches; prefer fiber + protein.\n"
+    "   - Heart disease → avoid saturated fats and fried foods; prefer olive oil, avocado, and fish.\n"
+    "   - High blood pressure → avoid sodium and processed meats; prefer potassium-rich foods.\n"
+    "   - High cholesterol → avoid red/processed meat and fried foods; prefer fiber and unsaturated fats.\n"
+    "   - Celiac Disease → gluten (bread, wraps, pasta) = violation (score = 0 if present).\n"
+    "   - Lactose Intolerance → dairy = violation (score ≤50).\n"
+    "4. MULTI-CONDITION HANDLING:\n"
+    "   - When multiple conditions or goals apply, take the strictest applicable adjustment.\n"
+    "   - Never mark a conflicting meal as 'healthy' under any condition.\n"
+    "5. FINAL OUTPUT QUALITY:\n"
+    "   - Provide practical, condition-safe suggestions.\n"
+    "   - Each improvement must help meet the goal while avoiding violations.\n"
+)
 
             examples = (
     "EXAMPLES:\n"
-    "- Balanced (300 kcal, 25g protein): suggestions=['Good protein balance'], improvements=[], positive_aspects=['Healthy macros']\n"
-    "- High-fat (800 kcal, 5g protein): improvements=['Add lean protein','Add vegetables for fiber']\n"
-    "- Vegan: suggestions=['Excellent plant proteins'], improvements=['Add B12 source']\n"
-    "- Keto: suggestions=['Strong fat-to-protein ratio'], improvements=['Add avocado for healthy fats']\n"
-    "- Diabetic: suggestions=['Complex carbs aid glucose control'], improvements=['Pair with protein to slow absorption']\n"
-    "- Hypertension: suggestions=['Low sodium helps heart health'], improvements=['Add potassium-rich foods like spinach']\n"
+    "1. Balanced Meal (500 kcal, P25g, C45g, F15g):\n"
+    "   health_score=88, meal_rating=8,\n"
+    "   suggestions=['Great macro balance','Good lean protein source'],\n"
+    "   improvements=['Add leafy greens for more fiber'],\n"
+    "   positive_aspects=['Supports maintenance goals','Low in saturated fat']\n\n"
+
+    "2. Bulking (700 kcal, P40g, C60g, F25g):\n"
+    "   health_score=90,\n"
+    "   suggestions=['Strong protein-to-calorie ratio'],\n"
+    "   improvements=['Add avocado or olive oil for more healthy fat'],\n"
+    "   positive_aspects=['Excellent for bulking','Supports muscle recovery']\n\n"
+
+    "3. Keto (600 kcal, P30g, C8g, F40g):\n"
+    "   health_score=95,\n"
+    "   suggestions=['Ideal carb restriction'],\n"
+    "   improvements=['Add greens for fiber'],\n"
+    "   positive_aspects=['Keto compliant','Good energy profile']\n\n"
+
+    "4. High Cholesterol Risk (600 kcal, P25g, C50g, F25g):\n"
+    "   health_score=55,\n"
+    "   suggestions=['Too much saturated fat'],\n"
+    "   improvements=['Use olive oil instead of butter','Add leafy vegetables'],\n"
+    "   positive_aspects=['Contains some fiber']\n\n"
+
+    "5. Diabetic (400 kcal, P20g, C60g, F10g):\n"
+    "   health_score=60,\n"
+    "   suggestions=['Complex carbs provide slow release'],\n"
+    "   improvements=['Add protein to reduce glycemic load'],\n"
+    "   positive_aspects=['Contains moderate calories']"
 )
+
 
             prompt = (
     f"You are an AI nutrition coach. Be factual, evidence-based, and concise.\n"
@@ -814,6 +877,8 @@ class FoodAnalyzerService:
     f"{user_context}\n"
     f"{contract}\n"
     f"{rules}\n"
+    f"{food_context_rules}\n"
+    f"{context_rules}\n"
     f"{examples}\n"
     "Return ONLY valid JSON matching the schema above."
 )
@@ -876,7 +941,16 @@ class FoodAnalyzerService:
 
             # Cache result
             self._rec_cache[cache_key] = result
-
+            try:
+                import json as json_module
+                import os
+                output_dir = os.path.dirname(os.path.abspath(__file__))
+                output_path = os.path.join(output_dir, "meal_recommendations.json")
+                with open(output_path, "w", encoding="utf-8") as f:
+                    json_module.dump(result, f, ensure_ascii=False, indent=2)
+                logger.info(f"Meal recommendations saved to {output_path}")
+            except Exception as file_exc:
+                logger.error(f"Failed to save meal recommendations: {file_exc}")
             logger.info(
                 "[OpenAI][END] step=recommendations dur_ms=%d hash=%s recs=%d", duration_ms, rec_hash, len(result.get('recommendations', []))
             )
@@ -894,14 +968,7 @@ class FoodAnalyzerService:
                 "positive_aspects": [],
             }
 
-    async def suggest_improvements(self, nutrition: Union[NutritionAnalysis, Dict[str, Any]], user_preferences: Optional[Dict[str, Any]] = None) -> List[str]:
-        """Public helper to get quick improvement suggestions."""
-        try:
-            rec = await self._get_recommendations(nutrition, user_preferences)
-            return rec.get("improvements", []) or rec.get("recommendations", [])
-        except Exception as e:
-            logger.error(f"Error in suggest_improvements: {e}")
-            return ["No improvements available."]
+
 
     async def answer_question(self, question: str, meal_data: Dict[str, Any], user_preferences: Optional[Dict[str, Any]] = None):
         """Answer user questions about the analyzed meal with a structured streaming response.

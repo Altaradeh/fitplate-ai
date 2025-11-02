@@ -1,0 +1,23 @@
+{
+  "meal_rating": 5,
+  "health_score": 50,
+  "suggestions": [
+    "Consider using healthier fat sources like olive oil",
+    "Explore lean protein options to meet dietary needs"
+  ],
+  "improvements": [
+    "Lower fat content to meet cutting goals",
+    "Increase protein to at least 40g for better satiety",
+    "Replace high-carb ingredients with low-carb vegetables"
+  ],
+  "positive_aspects": [
+    "Contains some protein",
+    "Provides a significant calorie contribution"
+  ],
+  "recommendations": [
+    "General balanced meal advice."
+  ],
+  "dietary_considerations": [
+    "none"
+  ]
+}

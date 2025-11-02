@@ -799,6 +799,8 @@ def main():
                         full_recommendations = safe_run_async(analyzer._get_recommendations(nutrition, st.session_state.prefs))
                         ai_insights = full_recommendations
                         suggestions = full_recommendations.get('suggestions', [])
+                        improvements = full_recommendations.get('improvements', [])
+                        suggestions = improvements + suggestions
                     else:
                         ai_insights = None
                         suggestions = []
@@ -860,11 +862,38 @@ def main():
                     c.get("nutrition", {}).get("calories", 0)
                     for c in components_list
                 )
-                cal_dv = nutrition_summary["calories"]["daily_value"]
-                title_html = f"<div class='meal-title-row'><div class='meal-title'>{confidence_emoji} {dish['dish_name']}</div><span class='meal-badge'>{confidence:.1f}%</span></div>"
 
+                cal_dv = nutrition_summary["calories"]["daily_value"]
+                health_score = None
+                heart_icon = ""
+                chip_color = ""
+                if nutrition and 'ai_insights' in nutrition and 'health_score' in nutrition['ai_insights']:
+                    health_score = nutrition['ai_insights']['health_score']
+                if health_score is not None:
+                    # Determine color and icon based on score
+                    try:
+                        score_val = float(health_score)
+                    except Exception:
+                        score_val = None
+                    if score_val is not None:
+                        if score_val >= 80:
+                            chip_color = "background: linear-gradient(135deg, #b9f6ca 0%, #43ea7a 100%) !important; border-color: #43ea7a !important; color: #1B5E20 !important;"
+                            heart_icon = "💚"
+                        elif score_val >= 50:
+                            chip_color = "background: linear-gradient(135deg, #fff59d 0%, #ffe082 100%) !important; border-color: #ffe082 !important; color: #795548 !important;"
+                            heart_icon = "💛"
+                        else:
+                            chip_color = "background: linear-gradient(135deg, #ff8a80 0%, #ff5252 100%) !important; border-color: #ff5252 !important; color: #fff !important;"
+                            heart_icon = "❤️"
+                    else:
+                        chip_color = ""
+                        heart_icon = "💚"
+                    score_html = f"<span style='{chip_color}'><span class='ico'>{heart_icon}</span> Health Score: {health_score}</span>"
+                title_html = f"<div class='meal-title-row'><div class='meal-title'>{heart_icon} {dish['dish_name']}</div></div>"
+
+                style_attr = f" style='{chip_color}'" if chip_color else ""
                 meal_card_html = f"""
-                    <div class='ui-card'>
+                    <div class='ui-card'{style_attr}>
                         {title_html}
                         <div class='stat-value'>{total_calories} <span>kcal</span></div>
                         <div class='stat-meter'><div class='fill' style='width:{cal_dv}%'></div></div>
@@ -900,11 +929,15 @@ def main():
                 chips_html = ""
                 # Suggestions chips
                 if suggestions:
+                    # Render all suggestions in a single card
                     sugg_chips = [
-                        f"<span class='chip chip-sugg'><span class='ico'>{_sugg_icon(s)}</span>{s}</span>"
+                        f"<span ><span class='ico'>{_sugg_icon(s)}</span>{s}</span>"
                         for s in suggestions
                     ]
-                    chips_html += ''.join(sugg_chips)
+                    st.markdown(
+                        f"<div class='ui-card suggestions-card'><div class='ui-card-title'>AI Suggestions</div><div class='chips'>{''.join(sugg_chips)}</div></div>",
+                        unsafe_allow_html=True,
+                    )
 
                 # Diet tags chips
                 if diet_tags:
@@ -915,29 +948,7 @@ def main():
                     chips_html += ''.join(tag_chips)
 
                 # Health score chip with dynamic color
-                health_score = None
-                if nutrition and 'ai_insights' in nutrition and 'health_score' in nutrition['ai_insights']:
-                    health_score = nutrition['ai_insights']['health_score']
-                if health_score is not None:
-                    # Determine color and icon based on score
-                    try:
-                        score_val = float(health_score)
-                    except Exception:
-                        score_val = None
-                    if score_val is not None:
-                        if score_val >= 80:
-                            chip_color = "background: linear-gradient(135deg, #b9f6ca 0%, #43ea7a 100%) !important; border-color: #43ea7a !important; color: #1B5E20 !important;"
-                            heart_icon = "💚"
-                        elif score_val >= 50:
-                            chip_color = "background: linear-gradient(135deg, #fff59d 0%, #ffe082 100%) !important; border-color: #ffe082 !important; color: #795548 !important;"
-                            heart_icon = "💛"
-                        else:
-                            chip_color = "background: linear-gradient(135deg, #ff8a80 0%, #ff5252 100%) !important; border-color: #ff5252 !important; color: #fff !important;"
-                            heart_icon = "❤️"
-                    else:
-                        chip_color = ""
-                        heart_icon = "💚"
-                    chips_html += f"<span class='chip chip-health' style='{chip_color}'><span class='ico'>{heart_icon}</span>Health Score: {health_score}</span>"
+                
 
                 # Render all chips together
                 if chips_html:
@@ -1126,17 +1137,21 @@ def main():
             else:
                 chat_suggestions = generate_chat_suggestions(st.session_state.prefs, analyzer)
             
-            cols = st.columns(len(chat_suggestions))
+            # Render all chat suggestions in a single card, buttons grouped together
             preset = None
-            for i, (col, s) in enumerate(zip(cols, chat_suggestions)):
-                with col:
-                    if st.button(s, key=f"suggest_{i}"):
-                        preset = s
-            
+            if chat_suggestions:
+                # Render each chat suggestion in a separate card/button
+                cols = st.columns(len(chat_suggestions))
+                preset = None
+                for i, s in enumerate(chat_suggestions):
+                    with cols[i]:
+                        if st.button(s, key=f"suggest_{i}"):
+                            preset = s
+
             # Always show chat input, but use preset if button was clicked
             chat_input = st.chat_input("💬 Ask about your meal")
             user_question = preset if preset else chat_input
-            
+
             if user_question:
                 with st.chat_message("user", avatar="🤔"):
                     st.write(user_question)
